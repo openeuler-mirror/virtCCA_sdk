@@ -359,7 +359,6 @@ void measure_load_data(cvm_init_measure_t *meas,
 	uint8_t *buffer_k_tmp;
 	gsize len;
 	unsigned char *buffer_k = NULL;
-	buffer_k = (unsigned char *)malloc(kernel_size_k);
 
 	if (!g_file_get_contents(kernel_path, (char **)&buffer_k_tmp, &len, NULL)) {
 		perror("Error open kernel file");
@@ -373,6 +372,7 @@ void measure_load_data(cvm_init_measure_t *meas,
 		kernel_size_k = hdrvals[1];
 		kernel_size_k = round_up(kernel_size_k, BLOCK_SIZE);
 	}
+	buffer_k = (unsigned char *)malloc(kernel_size_k);
 	if (buffer_k == NULL) {
 		perror("malloc buffer for kernel failed.");
 		free(buffer_k_tmp);
