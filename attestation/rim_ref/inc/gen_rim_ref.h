@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <glib.h>
 
 #define GRANULE_SIZE 				4096
 #define TMI_HASH_ALGO_SHA256		(0U)
@@ -38,6 +39,9 @@
 #define MB							0x100000
 #define KERNEL_LOAD_OFFSET			2*MB
 #define BLOCK_SIZE					L2_GRANULE
+#define LOADER_START_ADDR           0xc0000000  /* 3 GIB */
+#define ARM64_MAGIC_OFFSET          56
+#define ARM64_TEXT_OFFSET_OFFSET    8
 
 enum hash_algo {
 	HASH_ALGO_SHA256 = TMI_HASH_ALGO_SHA256,

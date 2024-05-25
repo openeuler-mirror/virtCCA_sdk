@@ -310,7 +310,6 @@ void measure_load_data(cvm_init_measure_t *meas,
 					   const char *dtb_path)
 {
 	FILE *file;
-	size_t kernel_size;
 	size_t initrd_size;
 	size_t dtb_size;
 
@@ -330,8 +329,7 @@ void measure_load_data(cvm_init_measure_t *meas,
 	size_t kernel_start = loader_start + KERNEL_LOAD_OFFSET;
 	size_t dtb_start = round_up(initrd_start + initrd_size, BLOCK_SIZE);
 	tmi_data_create_params_t params;
-
-	unsigned char *buffer;
+    unsigned char *buffer;
 
 	buffer = malloc(BLOCK_SIZE);
 	if (buffer == NULL) {
@@ -344,51 +342,60 @@ void measure_load_data(cvm_init_measure_t *meas,
 	get_bootloader_aarch64(kernel_start, dtb_start, code);
 	memset(buffer, 0, sizeof(buffer));
 	memcpy(buffer, code, sizeof(code));
-	memset(&params, 0, sizeof(params));
-	params.data = (uint64_t *)buffer;
-	params.size = L2_GRANULE;
-	SET_BIT(params.flags, 0);
-	params.ipa = addr;
-	measure_tmi_data_create(meas, &params);
+	for (uint64_t i = 0; i < BLOCK_SIZE / 4096; i++)
+	{
+		memset(&params, 0, sizeof(params));
+		params.data = (uint64_t *)(buffer + i * 4096);
+		params.size = 4096;
+		SET_BIT(params.flags, 0);
+		params.ipa = addr + i * 4096;
+		measure_tmi_data_create(meas, &params);
+	}
 	addr += L2_GRANULE;
 
 	/* Measure kernel*/
-	file = fopen(kernel_path, "rb");
-	if (file == NULL) {
-		perror("Error opening initramfs file");
+	uint64_t kernel_size_k = 0;
+	int size;
+	uint8_t *buffer_k_tmp;
+	gsize len;
+	size = len;
+	unsigned char *buffer_k = NULL;
+	buffer_k = (unsigned char *)malloc(kernel_size_k);
+
+	if (!g_file_get_contents(kernel_path, (char **)&buffer_k_tmp, &len, NULL)) {
+		perror("Error open kernel file");
 		return;
 	}
+	if (size > ARM64_MAGIC_OFFSET + 4 &&
+		memcmp(buffer_k_tmp + ARM64_MAGIC_OFFSET, "ARM\x64", 4) == 0) {
+		uint64_t hdrvals[2];
+		memcpy(&hdrvals, buffer_k_tmp + ARM64_TEXT_OFFSET_OFFSET, sizeof(hdrvals));
+		kernel_size_k = hdrvals[1];
+		kernel_size_k = round_up(kernel_size_k, BLOCK_SIZE);
+	}
+	if (buffer_k == NULL) {
+		perror("malloc buffer for kernel failed.");
+		free(buffer_k_tmp);
+		return;
+	}
+	memset(buffer_k, 0, kernel_size_k);
+	memcpy(buffer_k, buffer_k_tmp, size);
+	free(buffer_k_tmp);
 
-	while (!feof(file)) {
-		bytes_read = fread(buffer, 1, BLOCK_SIZE, file);
-		if (bytes_read < BLOCK_SIZE) {
-			if (ferror(file)) {
-				perror("Error reading initramfs file");
-				break;
-			}
-			memset(buffer + bytes_read, 0, BLOCK_SIZE - bytes_read);
+	for (uint64_t i = 0; i < kernel_size_k / BLOCK_SIZE; i++) {
+		for (uint64_t j = 0; j < BLOCK_SIZE / 4096; j++)
+		{
+			memset(&params, 0, sizeof(params));
+			params.data = (uint64_t *)(buffer_k + i * BLOCK_SIZE + j * 4096);
+			params.size = 4096;
+			SET_BIT(params.flags, 0);
+			params.ipa = addr + i * BLOCK_SIZE + j * 4096;
+			measure_tmi_data_create(meas, &params);
 		}
-
-		memset(&params, 0, sizeof(params));
-		params.data = (uint64_t *)buffer;
-		params.size = BLOCK_SIZE;
-		SET_BIT(params.flags, 0);
-		params.ipa = addr;
-		measure_tmi_data_create(meas, &params);
-		addr += BLOCK_SIZE;
 	}
 
 	/* Useless measurement */
-	while (addr < initrd_start) {
-		memset(buffer, 0, BLOCK_SIZE);
-		memset(&params, 0, sizeof(params));
-		params.data = (uint64_t *)buffer;
-    	params.size = BLOCK_SIZE;
-    	CLEAR_BIT(params.flags, 0);
-		params.ipa = addr;
-		measure_tmi_data_create(meas, &params);
-		addr += BLOCK_SIZE;
-	}
+    addr = initrd_start;
 
 	/* Measure initramfs*/
 	if (initrd_size != 0) {
@@ -435,26 +442,19 @@ void measure_load_data(cvm_init_measure_t *meas,
 			memset(buffer + bytes_read, 0, BLOCK_SIZE - bytes_read);
 		}
 
-		memset(&params, 0, sizeof(params));
-		params.data = (uint64_t *)buffer;
-    	params.size = BLOCK_SIZE;
-    	SET_BIT(params.flags, 0);
-		params.ipa = addr;
-		measure_tmi_data_create(meas, &params);
+		for (uint64_t i = 0; i < BLOCK_SIZE / 4096; i++)
+		{
+			memset(&params, 0, sizeof(params));
+			params.data = (uint64_t *)(buffer + i * 4096);
+			params.size = 4096;
+			SET_BIT(params.flags, 0);
+			params.ipa = addr + i * 4096;
+			measure_tmi_data_create(meas, &params);
+		}
 		addr += BLOCK_SIZE;
+
 	}
 
-	/* Measure data_create_unknown */
-	while (addr < addr_end) {
-		memset(buffer, 0, sizeof(buffer));
-		memset(&params, 0, sizeof(params));
-		params.data = (uint64_t *)buffer;
-    	params.size = BLOCK_SIZE;
-    	CLEAR_BIT(params.flags, 0);
-		params.ipa = addr;
-		measure_tmi_data_create(meas, &params);
-		addr += BLOCK_SIZE;
-	}
 }
 
 void measure_create_tecs(cvm_init_measure_t *meas,
@@ -519,17 +519,17 @@ void generate_rim_reference(const char *kernel_path, const char *dtb_path,
 							const char *initramfs_path)
 {
 	bool lpa2_enable = false;
-	bool sve_enable = false;
+	bool sve_enable = true;
 	bool pmu_enable = true;
 	uint64_t ipa_width = 40;
-	uint64_t sve_vector_length = 0;
+	uint64_t sve_vector_length = 1;
 	uint64_t num_bps = 0;
 	uint64_t num_wps = 0;
 	uint64_t num_pmu = 1;
 	uint64_t hash_algo = 0;
-	uint64_t tec_num = 2;
-	uint64_t loader_start = 1 * GiB;
-	uint64_t ram_size = 512 * MB;
+	uint64_t tec_num = 1;
+	uint64_t loader_start = LOADER_START_ADDR;
+	uint64_t ram_size = 1024 * MB;
 	uint64_t initrd_start = 128 * MB + loader_start;
 
 	cvm_init_measure_t meas={0};
