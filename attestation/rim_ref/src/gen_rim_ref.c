@@ -358,7 +358,6 @@ void measure_load_data(cvm_init_measure_t *meas,
 	int size;
 	uint8_t *buffer_k_tmp;
 	gsize len;
-	size = len;
 	unsigned char *buffer_k = NULL;
 	buffer_k = (unsigned char *)malloc(kernel_size_k);
 
@@ -366,6 +365,7 @@ void measure_load_data(cvm_init_measure_t *meas,
 		perror("Error open kernel file");
 		return;
 	}
+	size = len;
 	if (size > ARM64_MAGIC_OFFSET + 4 &&
 		memcmp(buffer_k_tmp + ARM64_MAGIC_OFFSET, "ARM\x64", 4) == 0) {
 		uint64_t hdrvals[2];
