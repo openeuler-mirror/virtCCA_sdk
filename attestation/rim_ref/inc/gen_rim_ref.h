@@ -114,8 +114,6 @@ typedef struct tmi_tec_params {
     uint64_t gprs[TEC_CREATE_NR_GPRS];
     uint64_t pc;
     uint64_t flags;
-    uint64_t reserved0;
-	uint64_t reserved1[16];
 } tmi_tec_params_t;
 
 /* TmmMeasurementDescriptorData type as per RMM spec */
