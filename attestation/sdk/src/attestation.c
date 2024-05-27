@@ -67,7 +67,7 @@ int get_attestation_token(tsi_ctx *ctx, unsigned char *challenge, size_t challen
         return INVALID_PARAM;
     }
 
-    strncpy(user_cmd.challenge, challenge, challenge_len);
+    memcpy(user_cmd.challenge, challenge, challenge_len);
 
     ret = ioctl(ctx->fd, TMM_GET_ATTESTATION_TOKEN, &user_cmd);
     if (ret != 0) {
