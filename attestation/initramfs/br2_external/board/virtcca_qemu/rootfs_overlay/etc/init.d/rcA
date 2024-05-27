@@ -9,11 +9,7 @@ ip a
 ip_addr=$(ip a | grep inet | grep -v inet6 | grep -v 127 | awk -F' ' '{print $2}' | awk -F'/' '{print $1}')
 echo "IP address: $ip_addr"
 
-server -i $ip_addr &
-pid=$!
-
-sleep 5
-wait $pid
+server -i $ip_addr
 exit_status=$?
 echo "server return $exit_status"
 
