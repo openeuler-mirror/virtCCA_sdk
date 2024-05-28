@@ -10,17 +10,22 @@
  * See the Mulan PSL v2 for more details.
  */
 
-#ifndef VIRTCCA_HUK_DERIVE_KEY_H
-#define VIRTCCA_HUK_DERIVE_KEY_H
+#ifndef VIRTCCA_SEALING_KEY_H
+#define VIRTCCA_SEALING_KEY_H
 
 #include <stdint.h>
 
 #define SEALING_KEY_LEN 32
 #define SEALING_SALT_LEN 64
 
+typedef enum {
+    SEALING_HMAC_SHA256
+} SEALING_KEY_ALG;
+
 /**
  * @brief   Get a sealing key from TMM with specified derivation parameters by PBKDF2 HUK derived
  *
+ * @param   alg         [IN]  The HMAC algorithm used in derive sealing key
  * @param   salt        [IN]  A user param used in huk derivation, length should be 64 byte.
  *                            This param is optional, set it to NULL to derived without user param.
  * @param   salt_len    [IN]  Length of the user param in byte, should be 64. or set to 0 when not specifying user param.
@@ -29,6 +34,6 @@
  * @return  0: successfully get the derived key
  *          -1: failed
 */
-int get_sealing_key(uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key);
+int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key);
 
 #endif
