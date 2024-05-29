@@ -29,11 +29,12 @@ typedef enum {
  * @param   salt        [IN]  A user param used in huk derivation, length should be 64 byte.
  *                            This param is optional, set it to NULL to derived without user param.
  * @param   salt_len    [IN]  Length of the user param in byte, should be 64. or set to 0 when not specifying user param.
- * @param   sealing_key [OUT] Addr of the output derived key, make sure that enough memory(>=32) had been allocated to the address.
+ * @param   sealing_key [OUT] Addr of the derived sealing key
+ * @param   key_len     [IN]  Length of the sealing_key buff, should not less than 32
  *
  * @return  0: successfully get the derived key
  *          -1: failed
 */
-int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key);
+int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key, uint32_t key_len);
 
 #endif
