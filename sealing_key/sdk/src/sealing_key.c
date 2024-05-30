@@ -30,14 +30,19 @@ struct sealing_key_params {
 #define SEAL_KEY_IOC_MAGIC 'd'
 #define IOCTL_SEALING_KEY _IOWR(SEAL_KEY_IOC_MAGIC, 0, struct sealing_key_params)
 
-int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key)
+int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key, uint32_t key_len)
 {
     int rc = 0;
     int fd = -1;
     struct sealing_key_params args = { 0 };
 
     if (salt && salt_len != SEALING_SALT_LEN) {
-        printf("ERROR: invalid salt len: %d! len should be within 64\n", salt_len);
+        printf("invalid salt len %d, should be equal %d\n", salt_len, SEALING_SALT_LEN);
+        return -1;
+    }
+
+    if (key_len < SEALING_KEY_LEN) {
+        printf("invalid sealing key len %d, should not less than %d\n", key_len, SEALING_KEY_LEN);
         return -1;
     }
 
@@ -45,7 +50,7 @@ int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8
         case SEALING_HMAC_SHA256:
             break;
         default:
-            printf("ERROR: current version not support this mode, alg: %d\n", alg);
+            printf("current version not support this mode, alg: %d\n", alg);
             return -1;
     }
 
@@ -62,8 +67,12 @@ int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8
     }
 
     rc = ioctl(fd, IOCTL_SEALING_KEY, &args);
-    if (rc < 0) {
-        printf("ioctl failed, err: %s,\n", strerror(errno));
+    if (rc) {
+        if (errno) {
+            printf("ioctl failed, err: %s\n", strerror(errno));
+        } else {
+            printf("driver got sealing key failed\n");
+        }
         (void)close(fd);
         return -1;
     }
