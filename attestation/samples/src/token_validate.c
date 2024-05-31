@@ -187,7 +187,7 @@ bool verify_cvm_pubkey(qbuf_t pub_key, X509 *x509_aik)
 done:
     EVP_PKEY_free(pkey1);
     EVP_PKEY_free(pkey2);
-    return true;
+    return ret;
 }
 
 bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key)
