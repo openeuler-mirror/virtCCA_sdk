@@ -236,6 +236,11 @@ bool verify_cca_token_signatures(cert_info_t *cert_info,
     unsigned int ret_bits = 0xFFFFFFFF;
     unsigned int index = 0;
 
+    if (!x509_root || !x509_sub || !x509_aik) {
+        printf("Failed to init X509!\n");
+        return false;
+    }
+
     /* Verify cvm signature */
     ret = verify_cvm_cose_sign(cvm_cose, cvm_pub_key);
     printf("Verifying if cVM token signature is signed by RAK: %s \n",
