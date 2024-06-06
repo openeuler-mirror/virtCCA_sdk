@@ -73,9 +73,9 @@ void print_usage(char *name)
 {
     printf("Usage: %s [options]\n", name);
     printf("Options:\n");
-    printf("-i, --ip <ip>                    ip\n");
-    printf("-p, --port <port>                port\n");
-    printf("-h, --help                       Print Help (this message) and exit\n");
+    printf("\t-i, --ip <ip>                      Listening IP address\n");
+    printf("\t-p, --port <port>                  Listening tcp port\n");
+    printf("\t-h, --help                         Print Help (this message) and exit\n");
 }
 
 int main(int argc, char *argv[])
