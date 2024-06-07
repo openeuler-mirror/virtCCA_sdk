@@ -415,12 +415,15 @@ void measure_load_data(cvm_init_measure_t *meas,
 				memset(buffer + bytes_read, 0, BLOCK_SIZE - bytes_read);
 			}
 
-			memset(&params, 0, sizeof(params));
-			params.data = (uint64_t *)buffer;
-			params.size = BLOCK_SIZE;
-			SET_BIT(params.flags, 0);
-			params.ipa = addr;
-			measure_tmi_data_create(meas, &params);
+			for (uint64_t i = 0; i < BLOCK_SIZE / 4096; i++)
+			{
+				memset(&params, 0, sizeof(params));
+				params.data = (uint64_t *)(buffer + i * 4096);
+				params.size = 4096;
+				SET_BIT(params.flags, 0);
+				params.ipa = addr + i * 4096;
+				measure_tmi_data_create(meas, &params);
+			}
 			addr += BLOCK_SIZE;
 		}
 	}
