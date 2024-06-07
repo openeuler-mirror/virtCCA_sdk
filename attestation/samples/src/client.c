@@ -18,11 +18,11 @@
 #include "openssl/x509.h"
 #include "openssl/pem.h"
 
-#define MAX_MEASURMENT_SIZE 64
+#define MAX_MEASUREMENT_SIZE 64
 
 unsigned char challenge[CHALLENGE_SIZE] = {};
-unsigned char measurment[MAX_MEASURMENT_SIZE] = {};
-size_t measurment_len = MAX_MEASURMENT_SIZE;
+unsigned char measurement[MAX_MEASUREMENT_SIZE] = {};
+size_t measurement_len = MAX_MEASUREMENT_SIZE;
 
 int verify_token(unsigned char *token, size_t token_len)
 {
@@ -45,9 +45,9 @@ int verify_token(unsigned char *token, size_t token_len)
     strcpy(cert_info.root_cert_url, DEFAULT_ROOT_CERT_URL);
     strcpy(cert_info.sub_cert_url, DEFAULT_SUB_CERT_URL);
 
-    if (cca_token.cvm_token.rim.len != measurment_len ||
-        memcmp(cca_token.cvm_token.rim.ptr, measurment, measurment_len)) {
-        printf("Failed to verify measurment.\n");
+    if (cca_token.cvm_token.rim.len != measurement_len ||
+        memcmp(cca_token.cvm_token.rim.ptr, measurement, measurement_len)) {
+        printf("Failed to verify measurement.\n");
         return VERIFY_FAILED;
     }
 
@@ -129,10 +129,10 @@ void print_usage(char *name)
 {
     printf("Usage: %s [options]\n", name);
     printf("Options:\n");
-    printf("-i, --ip <ip>                    ip\n");
-    printf("-p, --port <port>                port\n");
-    printf("-m, --measurment <measurment>    measurment\n");
-    printf("-h, --help                       Print Help (this message) and exit\n");
+    printf("\t-i, --ip <ip>                      Listening IP address\n");
+    printf("\t-p, --port <port>                  Listening tcp port\n");
+    printf("\t-m, --measurement <measurement>    Initial measurement for cVM\n");
+    printf("\t-h, --help                         Print Help (this message) and exit\n");
 }
 
 int main(int argc, char *argv[])
@@ -143,13 +143,13 @@ int main(int argc, char *argv[])
 
     int ip = htonl(INADDR_LOOPBACK);
     int port = htons(PORT);
-    unsigned char *measurment_hex = "";
+    unsigned char *measurement_hex = "";
 
     int option;
     struct option const long_options[] = {
         { "ip", required_argument, NULL, 'i' },
         { "port", required_argument, NULL, 'p' },
-        { "measurment", required_argument, NULL, 'm' },
+        { "measurement", required_argument, NULL, 'm' },
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
@@ -167,9 +167,9 @@ int main(int argc, char *argv[])
             port = htons(atoi(optarg));
             break;
         case 'm':
-            measurment_hex = optarg;
-            if (hex_to_bytes(measurment_hex, strlen(measurment_hex), measurment, &measurment_len) != 0) {
-                printf("Invalid measurment.\n");
+            measurement_hex = optarg;
+            if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
+                printf("Invalid measurement.\n");
                 exit(1);
             }
             break;

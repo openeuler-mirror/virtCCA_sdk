@@ -197,10 +197,10 @@ bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key)
     struct t_cose_key key_pair;
     struct t_cose_sign1_verify_ctx verify_ctx;
 
-    /* Export public key to an ECDSA key pair */
+    /* Export public key to an RSA key pair */
     ret = init_signing_key(&key_pair, pub_key);
     if (ret != T_COSE_SUCCESS) {
-        printf("Failed to made EC key with curve secp384r1: %d\n", ret);
+        printf("Failed to made RSA key: %d\n", ret);
         return false;
     }
 
@@ -235,6 +235,11 @@ bool verify_cca_token_signatures(cert_info_t *cert_info,
     bool ret;
     unsigned int ret_bits = 0xFFFFFFFF;
     unsigned int index = 0;
+
+    if (!x509_root || !x509_sub || !x509_aik) {
+        printf("Failed to init X509!\n");
+        return false;
+    }
 
     /* Verify cvm signature */
     ret = verify_cvm_cose_sign(cvm_cose, cvm_pub_key);
