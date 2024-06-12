@@ -53,11 +53,11 @@ int handle_connect(int connfd, tsi_ctx *ctx)
             }
             write(connfd, token, token_len);
         } else if (msg_id == VERIFY_SUCCESS_MSG_ID) {
-            printf("verify success!\n");
+            printf("Succeed to verify!\n");
             ret = VERIFY_SUCCESS;
             break;
         } else if (msg_id == VERIFY_FAILED_MSG_ID) {
-            printf("verify failed!\n");
+            printf("Failed to verify!\n");
             ret = VERIFY_FAILED;
             break;
         } else {
