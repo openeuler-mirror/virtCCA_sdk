@@ -34,13 +34,7 @@ typedef struct cvm_tsi_version {
 
 typedef struct cvm_attestation_cmd {
     unsigned char challenge[CHALLENGE_SIZE]; /* input: challenge value */
-    unsigned long token_size; /* return: challenge value */
-    void* granule_head;
-    void* granule_ipa;  /* IPA of the Granule to which the token will be written */
-    unsigned long granule_count;
-    unsigned long offset; /* Offset within Granule to start of buffer in bytes */
-    unsigned long size;  /* Size of buffer in bytes */
-    unsigned long num_wr_bytes; /* Number of bytes written to buffer */
+    unsigned long token_size; /* return: token size */
 } cvm_attestation_cmd_t;
 
 typedef struct cca_dev_cert {
