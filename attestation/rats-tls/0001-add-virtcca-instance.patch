@@ -1,0 +1,5563 @@
+From e23137b948f0e2c128187a48b201ef5e74411fa2 Mon Sep 17 00:00:00 2001
+From: lishengjie <lishengjie12@huawei.com>
+Date: Thu, 13 Jun 2024 17:18:19 +0800
+Subject: [PATCH] add virtcca instance
+
+---
+ CMakeLists.txt                                |  17 +-
+ build.sh                                      | 309 +++++++++++++
+ cmake/CustomInstallDirs.cmake                 |  26 +-
+ samples/CMakeLists.txt                        |   2 +
+ samples/rats-tls-client/CMakeLists.txt        |   2 +-
+ samples/rats-tls-server/CMakeLists.txt        |   2 +-
+ samples/sgx-stub-enclave/CMakeLists.txt       |   2 +-
+ samples/sgx-stub-enclave/sgx_stub_ecall.c     |   6 +-
+ samples/virtcca-client/CMakeLists.txt         |  30 ++
+ samples/virtcca-client/ima_measure.c          | 421 ++++++++++++++++++
+ samples/virtcca-client/inc/ima_measure.h      |  17 +
+ samples/virtcca-client/inc/token_parse.h      | 104 +++++
+ samples/virtcca-client/inc/token_validate.h   |  40 ++
+ samples/virtcca-client/rats-client.c          | 309 +++++++++++++
+ samples/virtcca-client/token_parse.c          | 382 ++++++++++++++++
+ samples/virtcca-client/token_validate.c       | 328 ++++++++++++++
+ samples/virtcca-client/utils/CMakeLists.txt   |  19 +
+ samples/virtcca-client/utils/inc/utils.h      |  11 +
+ samples/virtcca-client/utils/src/utils.c      |  60 +++
+ samples/virtcca-server/CMakeLists.txt         |  25 ++
+ samples/virtcca-server/rats-server.c          | 350 +++++++++++++++
+ src/CMakeLists.txt                            |   9 +-
+ src/api/rats_tls_init.c                       |   8 -
+ src/attesters/CMakeLists.txt                  |   4 +
+ src/attesters/api/enclave_attester_register.c |  29 +-
+ src/attesters/csv/collect_evidence.c          |   3 +-
+ src/attesters/csv/pre_init.c                  |  11 +-
+ .../internal/rtls_enclave_attester_load_all.c |  15 +-
+ src/attesters/tdx-ecdsa/pre_init.c            |   1 +
+ src/attesters/virtcca/CMakeLists.txt          |  30 ++
+ src/attesters/virtcca/cleanup.c               |  14 +
+ src/attesters/virtcca/collect_evidence.c      |  67 +++
+ src/attesters/virtcca/init.c                  |  29 ++
+ src/attesters/virtcca/main.c                  |  33 ++
+ src/attesters/virtcca/pre_init.c              |   9 +
+ src/core/cpu.c                                | 123 +++--
+ src/core/dice.c                               |  66 ++-
+ src/core/main.c                               |   4 +-
+ src/core/rtls_common.c                        |  80 ++--
+ src/core/rtls_core_generate_certificate.c     |  33 +-
+ .../internal/rtls_crypto_wrapper_load_all.c   |  18 +-
+ src/include/internal/attester.h               |   2 +
+ src/include/internal/core.h                   |   2 +
+ src/include/internal/cpu.h                    |   1 +
+ src/include/internal/crypto_wrapper.h         |   2 +
+ src/include/internal/dice.h                   |   4 +
+ src/include/internal/tls_wrapper.h            |   2 +
+ src/include/internal/verifier.h               |   2 +
+ src/include/rats-tls/api.h                    |   8 +-
+ src/include/rats-tls/attester.h               |  18 +-
+ src/include/rats-tls/cert.h                   |   8 +
+ src/include/rats-tls/err.h                    |   1 +
+ src/include/rats-tls/log.h                    |   8 +
+ src/include/rats-tls/nonce.h                  |   6 +
+ src/include/rats-tls/tls_wrapper.h            |   4 +-
+ src/include/rats-tls/verifier.h               |  14 +-
+ src/include/rats-tls/virtcca.h                |  97 ++++
+ ...tls_wrapper_verify_certificate_extension.c |  99 ++--
+ src/tls_wrappers/nulltls/negotiate.c          |   4 +-
+ src/tls_wrappers/nulltls/receive.c            |   2 +-
+ src/tls_wrappers/nulltls/transmit.c           |   2 +-
+ src/tls_wrappers/openssl/CMakeLists.txt       |   1 +
+ src/tls_wrappers/openssl/get_nonce.c          |  49 ++
+ src/tls_wrappers/openssl/main.c               |   3 +
+ src/tls_wrappers/openssl/negotiate.c          |   9 +-
+ src/tls_wrappers/openssl/un_negotiate.c       |  38 +-
+ src/tls_wrappers/openssl/use_cert.c           |   4 +-
+ src/tls_wrappers/openssl/use_privkey.c        |   2 +-
+ src/tls_wrappers/openssl/x509_openssl10x.c    |   3 +-
+ src/verifiers/CMakeLists.txt                  |   8 +-
+ .../internal/rtls_enclave_verifier_select.c   |   2 +-
+ src/verifiers/sev-snp/pre_init.c              |  33 +-
+ src/verifiers/sev/pre_init.c                  |  11 +-
+ src/verifiers/virtcca/CMakeLists.txt          |  39 ++
+ src/verifiers/virtcca/cleanup.c               |  20 +
+ src/verifiers/virtcca/init.c                  |  23 +
+ src/verifiers/virtcca/main.c                  |  33 ++
+ src/verifiers/virtcca/pre_init.c              |  15 +
+ src/verifiers/virtcca/token_parse.c           | 382 ++++++++++++++++
+ src/verifiers/virtcca/token_parse.h           | 104 +++++
+ src/verifiers/virtcca/verify_evidence.c       |  64 +++
+ 81 files changed, 3936 insertions(+), 241 deletions(-)
+ create mode 100644 build.sh
+ create mode 100644 samples/virtcca-client/CMakeLists.txt
+ create mode 100644 samples/virtcca-client/ima_measure.c
+ create mode 100644 samples/virtcca-client/inc/ima_measure.h
+ create mode 100644 samples/virtcca-client/inc/token_parse.h
+ create mode 100644 samples/virtcca-client/inc/token_validate.h
+ create mode 100644 samples/virtcca-client/rats-client.c
+ create mode 100644 samples/virtcca-client/token_parse.c
+ create mode 100644 samples/virtcca-client/token_validate.c
+ create mode 100644 samples/virtcca-client/utils/CMakeLists.txt
+ create mode 100644 samples/virtcca-client/utils/inc/utils.h
+ create mode 100644 samples/virtcca-client/utils/src/utils.c
+ create mode 100644 samples/virtcca-server/CMakeLists.txt
+ create mode 100644 samples/virtcca-server/rats-server.c
+ create mode 100644 src/attesters/virtcca/CMakeLists.txt
+ create mode 100644 src/attesters/virtcca/cleanup.c
+ create mode 100644 src/attesters/virtcca/collect_evidence.c
+ create mode 100644 src/attesters/virtcca/init.c
+ create mode 100644 src/attesters/virtcca/main.c
+ create mode 100644 src/attesters/virtcca/pre_init.c
+ create mode 100644 src/include/rats-tls/nonce.h
+ create mode 100644 src/include/rats-tls/virtcca.h
+ create mode 100644 src/tls_wrappers/openssl/get_nonce.c
+ create mode 100644 src/verifiers/virtcca/CMakeLists.txt
+ create mode 100644 src/verifiers/virtcca/cleanup.c
+ create mode 100644 src/verifiers/virtcca/init.c
+ create mode 100644 src/verifiers/virtcca/main.c
+ create mode 100644 src/verifiers/virtcca/pre_init.c
+ create mode 100644 src/verifiers/virtcca/token_parse.c
+ create mode 100644 src/verifiers/virtcca/token_parse.h
+ create mode 100644 src/verifiers/virtcca/verify_evidence.c
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a6585fb..a85336a 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -23,7 +23,7 @@ option(BUILD_FUZZ "Use lib-fuzzer to fuzz the code, default OFF" OFF)
+ 
+ # Define build mode
+ set(RATS_TLS_BUILD_MODE "host"
+-    CACHE STRING "Select build mode for rats-tls(normal|occlum|sgx)")
++    CACHE STRING "Select build mode for rats-tls(normal|occlum|sgx|virtcca)")
+ 
+ # Print build mode
+ message(STATUS "Build Mode: ${RATS_TLS_BUILD_MODE}")
+@@ -38,6 +38,7 @@ set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+ #  occlum: OCCLUM
+ #  sgx: SGX
+ #  tdx: TDX
++#  virtcca: VirtCCA
+ if(RATS_TLS_BUILD_MODE STREQUAL "host")
+     set(HOST 1)
+     add_definitions(-DHOST)
+@@ -51,12 +52,14 @@ elseif(RATS_TLS_BUILD_MODE STREQUAL "sgx")
+     else()
+         message(STATUS "Found intel sgx sdk.")
+     endif()
+-
+     set(SGX 1)
+     add_definitions(-DSGX)
+ elseif(RATS_TLS_BUILD_MODE STREQUAL "tdx")
+     set(TDX 1)
+     add_definitions(-DTDX)
++elseif(RATS_TLS_BUILD_MODE STREQUAL "virtcca")
++    set(VIRTCCA 1)
++    add_definitions(-DVIRTCCA)
+ else()
+     message(FATAL_ERROR "Invalid build mode!")
+ endif()
+@@ -86,6 +89,16 @@ else()
+     message(FATAL_ERROR "Invalid build type!")
+ endif()
+ 
++set(RATS_TLS_INSTALL_PATH_DEFAULT "/usr/lib/rats-tls")
++
++# Define install path
++set(RATS_TLS_INSTALL_PATH "${RATS_TLS_INSTALL_PATH_DEFAULT}" CACHE STRING 
++    "Absoluate path to install the .so and .h")
++
++# Define sample path
++set(RATS_TLS_INSTALL_BIN_PATH "/usr/share/rats-tls/samples" CACHE STRING 
++    "Absoluate path to install the sample bin")
++
+ # Include custom modules
+ include(CustomInstallDirs)
+ include(CompilerOptions)
+diff --git a/build.sh b/build.sh
+new file mode 100644
+index 0000000..7885e43
+--- /dev/null
++++ b/build.sh
+@@ -0,0 +1,309 @@
++#!/bin/bash
++# Copyright Huawei Technologies Co., Ltd. 2021-2021. All rights reserved.
++set -e
++
++export ROOT_DIR=$(cd $(dirname "$0"); pwd -P)
++export BUILD_DIR="${ROOT_DIR}"/build
++export OUTPUT_DIR="${ROOT_DIR}"/output
++export SAMPLE_DIR=${OUTPUT_DIR}
++export USR_COMPILER_CC=""
++export BUILD_TYPE=""
++export CLEAN_ENABLED=false
++export BUILD_SAMPLES=off
++export BUILD_FUZZ=off
++export RATS_TLS_BUILD_MODE="virtcca"
++export ARCH="arm64"
++export CROSS_COMPILE
++export CC
++export CXX
++export RATS_TLS_LOG_LEVLE="info"
++
++REMOTE_COMIPLE=OFF
++
++print_help() {
++    echo -e "\nUsage:"
++    echo -e "    build.sh [options]...\n"
++    echo -e "Options:"
++    echo -e "    -v, --usrcompiler compiler for target." 
++    echo -e "        Default value is \"aarch64-linux-gnu-gcc\"\n"
++    echo -e "    -b, --buildtype"
++    echo -e "        Select the build type from debug|prerelease|release. Default value is \"debug\"\n"
++    echo -e "    -c, --clean"
++    echo -e "        Clean all the files from previous build, default false.\n"
++    echo -e "    -s, --sample"
++    echo -e "        Build samples,default false.\n"
++    echo -e "    -f, --fuzz"
++    echo -e "        Build fuzz, default false.\n"
++    echo -e "    -S, --run_server"
++    echo -e "        Run svirtcca-server.\n"
++    echo -e "    -C, --run_client"
++    echo -e "        Run virtcca-client.\n"
++    echo -e "    --sample_client"
++    echo -e "        Run rats-tls-clinet.\n"
++    echo -e "    --sample_server"
++    echo -e "        Run rats-tls-server.\n"
++    echo -e "    -h, --help"
++    echo -e "        Display this help and exit.\n"
++}
++
++run_server() {
++    export LD_LIBRARY_PATH=${OUTPUT_DIR}/lib/rats-tls:$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=${RATS_TLS_LOG_LEVLE}
++    echo ${LD_LIBRARY_PATH}
++    cd ${SAMPLE_DIR}
++    ./virtcca-server -l ${RATS_TLS_LOG_LEVLE}
++}
++
++run_client() {
++    export LD_LIBRARY_PATH=${OUTPUT_DIR}/lib/rats-tls:$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=${RATS_TLS_LOG_LEVLE}
++    echo ${LD_LIBRARY_PATH}
++    cd ${SAMPLE_DIR}
++    ./virtcca-client -l ${RATS_TLS_LOG_LEVLE}
++}
++
++sample_client() {
++    export LD_LIBRARY_PATH=${OUTPUT_DIR}/lib/rats-tls:$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=${RATS_TLS_LOG_LEVLE}
++    echo ${LD_LIBRARY_PATH}
++    cd ${SAMPLE_DIR}
++    ./rats-tls-client -l ${RATS_TLS_LOG_LEVLE}
++}
++
++sample_server() {
++    export LD_LIBRARY_PATH=${OUTPUT_DIR}/lib/rats-tls:$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=${RATS_TLS_LOG_LEVLE}
++    echo ${LD_LIBRARY_PATH}
++    cd ${SAMPLE_DIR}
++    ./rats-tls-server -l ${RATS_TLS_LOG_LEVLE}
++}
++
++#########################################
++# Parse Input Parameters
++#########################################
++! getopt --test > /dev/null
++if [[ ${PIPESTATUS[0]} -ne 4 ]]; then
++    echo 'getopt is not the enhanced version.'
++    exit 1
++fi
++
++OPTIONS=rb:v:csfSCh
++LONGOPTS=remote,usrcompiler:,buildtype:,clean,sample,fuzz,run_server,run_client,help,sample_client,sample_server
++
++! PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTS --name "build" -- "$@")
++if [[ ${PIPESTATUS[0]} -ne 0 ]]; then
++    print_help
++    exit 2
++fi
++
++# reset parameters
++eval set -- "$PARSED"
++
++while true; do
++    case "${1}" in
++        -h|--help)
++            print_help
++            exit 0
++            ;;
++        -r|--remote)
++            REMOTE_COMIPLE=ON
++            shift
++            ;;
++        -S|--run_server)
++            run_server
++            exit 0
++            ;;
++        -C|--run_client)
++            run_client
++            exit 0
++            ;;
++        --sample_server)
++            sample_server
++            exit 0
++            ;;
++        --sample_client)
++            sample_client
++            exit 0
++            ;;
++        -b|--buildtype)
++            BUILD_TYPE="${2}"
++            shift 2
++            ;;
++        -v|--usrcompiler)
++            USR_COMPILER_CC="${2}"
++            shift 2
++            ;;
++        -c|--clean)
++            CLEAN_ENABLED="true"
++            shift
++            ;;
++        -s|--sample)
++            BUILD_SAMPLES=on
++            shift
++            ;;
++        -f|--fuzz)
++            BUILD_FUZZ=on
++            shift
++            ;;
++        --)
++            shift
++            break
++            ;;
++        *)
++            echo "Programming error"
++            exit 3
++            ;;
++    esac
++done
++
++#########################################
++# Check Input Parameters
++#########################################
++
++if [[ -z "${CXX}" ]]; then
++    CXX=$(which g++)
++fi
++
++if [[ "${USR_COMPILER_CC}" == "" ]]; then
++    USR_COMPILER_CC=aarch64-linux-gnu-gcc
++elif [ "${USR_COMPILER_CC}" != "aarch64-linux-gnu-gcc" ] && 
++     [ "${USR_COMPILER_CC}" != "gcc" ]; then
++    echo "ERROR: your input compiler is not support: ${USR_COMPILER_CC}"
++    print_help
++    exit 1
++fi
++if [[ -z "${CC}" ]]; then
++    CC="${USR_COMPILER_CC}"
++fi
++
++#set compile item
++if [[ "${USR_COMPILER_CC}" == "gcc" ]]; then
++    CROSS_COMPILE=""
++else
++    CROSS_COMPILE=$(echo "${USR_COMPILER_CC%-*}-")
++fi
++
++if [[ "${BUILD_TYPE}" == "" ]]; then
++    BUILD_TYPE="debug"
++elif [ "${BUILD_TYPE}" != "debug" ] &&
++     [ "${BUILD_TYPE}" != "prerelease" ] && 
++     [ "${BUILD_TYPE}" != "release" ]; then
++     echo "ERROR: your input build type is not support: ${BUILD_TYPE}"
++     print_help
++    exit 1
++fi
++
++echo -e "\nRATS-TLS compiling info:"
++echo -e "user c++ compiler    = ${CXX}"
++echo -e "user c compiler      = ${CC}"
++echo -e "build type           = ${BUILD_TYPE}"
++echo -e "clean enabled        = ${CLEAN_ENABLED}"
++echo -e "building dir         = ${BUILD_DIR}"
++echo -e "output dir           = ${OUTPUT_DIR}\n"
++
++#########################################
++# Compiling Process
++#########################################
++ echo -e "INFO: compiling..."
++
++if [[ "${CLEAN_ENABLED}" == "true" ]]; then
++    [ -n "${BUILD_DIR}" ] && rm -rf "${BUILD_DIR}"
++    [ -n "${OUTPUT_DIR}" ] && rm -rf "${OUTPUT_DIR}"
++fi
++
++mkdir -p "${BUILD_DIR}"
++mkdir -p "${OUTPUT_DIR}"
++
++pushd "${BUILD_DIR}"
++
++cmake -DRATS_TLS_BUILD_MODE=${RATS_TLS_BUILD_MODE} \
++      -DRATS_TLS_BUILD_TYPE=${BUILD_TYPE} \
++      -DBUILD_SAMPLES=${BUILD_SAMPLES} \
++      -DBUILD_FUZZ=${BUILD_FUZZ} \
++      -DSGX_HW=off \
++      -DSGX_LVI_MITIGATION=off \
++      -DRATS_TLS_INSTALL_PATH=${OUTPUT_DIR} \
++      -DRATS_TLS_INSTALL_BIN_PATH=${SAMPLE_DIR} \
++      -DREMOTE_COMIPLE=${REMOTE_COMIPLE} ..
++
++make -C ${BUILD_DIR} install
++popd
++echo "INFO: building rats-tls finished..."
++
++echo "INFO: generating shell script..."
++target_script=${OUTPUT_DIR}/run.sh
++cat > ${target_script} << EOF
++#!/bin/bash
++set -e
++
++export RATS_TLS_LOG_LEVLE="${RATS_TLS_LOG_LEVLE}"
++
++run_server() {
++    export LD_LIBRARY_PATH=/usr/lib/rats-tls:\$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=\${RATS_TLS_LOG_LEVLE}
++    echo \${LD_LIBRARY_PATH}
++    ./virtcca-server -l \${RATS_TLS_LOG_LEVLE} -I
++}
++
++run_client() {
++    export LD_LIBRARY_PATH=/usr/lib/rats-tls:\$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=\${RATS_TLS_LOG_LEVLE}
++    echo \${LD_LIBRARY_PATH}
++    ./virtcca-client -l \${RATS_TLS_LOG_LEVLE}
++}
++
++run_server_sample() {
++    export LD_LIBRARY_PATH=/usr/lib/rats-tls:\$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=\${RATS_TLS_LOG_LEVLE}
++    echo \${LD_LIBRARY_PATH}
++    ./rats-tls-server -l \${RATS_TLS_LOG_LEVLE}
++}
++
++run_client_sample() {
++    export LD_LIBRARY_PATH=/usr/lib/rats-tls:\$LD_LIBRARY_PATH
++    export RATS_TLS_GLOBAL_LOG_LEVEL=\${RATS_TLS_LOG_LEVLE}
++    echo \${LD_LIBRARY_PATH}
++    ./rats-tls-client -l \${RATS_TLS_LOG_LEVLE}
++}
++
++install() {
++    rm -rf /usr/lib/rats-tls
++    rm -rf /usr/local/include/rats-tls
++    mv -f lib/rats-tls /usr/lib/rats-tls
++    mv -f include/rats-tls /usr/local/include/rats-tls
++}
++
++if [ "\$1" == "server" ]
++then
++      run_server
++fi
++
++if [ "\$1" == "client" ]
++then
++      run_client
++fi
++
++if [ "\$1" == "sserver" ]
++then
++      run_server_sample
++fi
++
++if [ "\$1" == "sclient" ]
++then
++      run_client_sample
++fi
++
++if [ "\$1" == "install" ]
++then
++      install
++fi
++EOF
++
++chmod +x ${target_script}
++
++echo "INFO: warpping output..."
++BIN_DIR="${ROOT_DIR}"/bin
++rm -rf ${BIN_DIR}
++mkdir -p ${BIN_DIR}
++pushd "${OUTPUT_DIR}"
++tar -czvf ${BIN_DIR}/rats-tls.tar.gz  *
+\ No newline at end of file
+diff --git a/cmake/CustomInstallDirs.cmake b/cmake/CustomInstallDirs.cmake
+index d6be5bf..83588f1 100644
+--- a/cmake/CustomInstallDirs.cmake
++++ b/cmake/CustomInstallDirs.cmake
+@@ -1,27 +1,41 @@
+-# /usr/local
+-set(RATS_TLS_INSTALL_PATH "/usr/local")
+-
+ # lib/rats_tls
+ set(RATS_TLS_INSTALL_LIB_PATH "${RATS_TLS_INSTALL_PATH}/lib/rats-tls")
+ 
+ # rats_tls/crypto-wrappers
+ set(RATS_TLS_INSTALL_LIBCW_PATH "${RATS_TLS_INSTALL_LIB_PATH}/crypto-wrappers")
++if(REMOTE_COMIPLE)
++    add_definitions(-DCRYPTO_WRAPPERS_DIR="${RATS_TLS_INSTALL_PATH_DEFAULT}/crypto-wrappers/")
++else()
++    add_definitions(-DCRYPTO_WRAPPERS_DIR="${RATS_TLS_INSTALL_LIBCW_PATH}/")
++endif()
+ 
+ # rats_tls/attesters
+ set(RATS_TLS_INSTALL_LIBA_PATH "${RATS_TLS_INSTALL_LIB_PATH}/attesters")
++if(REMOTE_COMIPLE)
++    add_definitions(-DENCLAVE_ATTESTERS_DIR="${RATS_TLS_INSTALL_PATH_DEFAULT}/attesters/")
++else()
++    add_definitions(-DENCLAVE_ATTESTERS_DIR="${RATS_TLS_INSTALL_LIBA_PATH}/")
++endif()
+ 
+ # rats_tls/verifiers
+ set(RATS_TLS_INSTALL_LIBV_PATH "${RATS_TLS_INSTALL_LIB_PATH}/verifiers")
++if(REMOTE_COMIPLE)
++    add_definitions(-DENCLAVE_VERIFIERS_DIR="${RATS_TLS_INSTALL_PATH_DEFAULT}/verifiers/")
++else()
++    add_definitions(-DENCLAVE_VERIFIERS_DIR="${RATS_TLS_INSTALL_LIBV_PATH}/")
++endif()
+ 
+ # rats_tls/tls-wrappers
+ set(RATS_TLS_INSTALL_LIBTW_PATH "${RATS_TLS_INSTALL_LIB_PATH}/tls-wrappers")
++if(REMOTE_COMIPLE)
++    add_definitions(-DTLS_WRAPPERS_DIR="${RATS_TLS_INSTALL_PATH_DEFAULT}/tls-wrappers/")
++else()
++    add_definitions(-DTLS_WRAPPERS_DIR="${RATS_TLS_INSTALL_LIBTW_PATH}/")
++endif()
+ 
+ # include/rats_tls
+ set(RATS_TLS_INSTALL_INCLUDE_PATH "${RATS_TLS_INSTALL_PATH}/include/rats-tls")
+ 
+-# rats_tls/sample
+-set(RATS_TLS_INSTALL_BIN_PATH "/usr/share/rats-tls/samples")
+-
+ # sgx sdk
+ if(EXISTS $ENV{SGX_SDK})
+     set(SGXSDK_INSTALL_PATH "$ENV{SGX_SDK}")
+diff --git a/samples/CMakeLists.txt b/samples/CMakeLists.txt
+index c77319e..dca3333 100644
+--- a/samples/CMakeLists.txt
++++ b/samples/CMakeLists.txt
+@@ -1,5 +1,7 @@
+ add_subdirectory(rats-tls-client)
+ add_subdirectory(rats-tls-server)
++add_subdirectory(virtcca-server)
++add_subdirectory(virtcca-client)
+ if(SGX)
+     add_subdirectory(sgx-stub-enclave)
+ endif()
+diff --git a/samples/rats-tls-client/CMakeLists.txt b/samples/rats-tls-client/CMakeLists.txt
+index 4fd68a4..bfbbaff 100644
+--- a/samples/rats-tls-client/CMakeLists.txt
++++ b/samples/rats-tls-client/CMakeLists.txt
+@@ -67,4 +67,4 @@ else()
+ endif()
+ 
+ install(TARGETS ${PROJECT_NAME}
+-	DESTINATION /usr/share/rats-tls/samples)
++	DESTINATION ${RATS_TLS_INSTALL_BIN_PATH})
+diff --git a/samples/rats-tls-server/CMakeLists.txt b/samples/rats-tls-server/CMakeLists.txt
+index 1e3d0b9..c70293d 100644
+--- a/samples/rats-tls-server/CMakeLists.txt
++++ b/samples/rats-tls-server/CMakeLists.txt
+@@ -68,4 +68,4 @@ else()
+ endif()
+ 
+ install(TARGETS ${PROJECT_NAME}
+-	DESTINATION /usr/share/rats-tls/samples)
++	DESTINATION ${RATS_TLS_INSTALL_BIN_PATH})
+diff --git a/samples/sgx-stub-enclave/CMakeLists.txt b/samples/sgx-stub-enclave/CMakeLists.txt
+index 8b1293e..1e9875b 100644
+--- a/samples/sgx-stub-enclave/CMakeLists.txt
++++ b/samples/sgx-stub-enclave/CMakeLists.txt
+@@ -76,4 +76,4 @@ enclave_sign(sgx_stub_enclave KEY sgx_stub_enclave.pem CONFIG sgx_stub_enclave.x
+ add_dependencies(sgx_stub_enclave rats_tls)
+ 
+ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/sgx_stub_enclave.signed.so
+-        DESTINATION /usr/share/rats-tls/samples)
++        DESTINATION ${RATS_TLS_INSTALL_BIN_PATH})
+diff --git a/samples/sgx-stub-enclave/sgx_stub_ecall.c b/samples/sgx-stub-enclave/sgx_stub_ecall.c
+index 4d05bd5..9a6f20e 100644
+--- a/samples/sgx-stub-enclave/sgx_stub_ecall.c
++++ b/samples/sgx-stub-enclave/sgx_stub_ecall.c
+@@ -127,7 +127,7 @@ int ecall_rtls_server_startup(rats_tls_log_level_t log_level, char *attester_typ
+ 	uint32_t addrlen_in = sizeof(c_addr);
+ 	uint32_t addrlen_out;
+ 	while (1) {
+-		RTLS_INFO("Waiting for a connection from client ...\n");
++		RTLS_INFO("Waiting for a connection ...\n");
+ 
+ 		int64_t connd;
+ 		sgx_status = ocall_accept(&connd, sockfd, &c_addr, addrlen_in, &addrlen_out);
+@@ -255,7 +255,7 @@ int ecall_rtls_client_startup(rats_tls_log_level_t log_level, char *attester_typ
+ 	if (verdictd)
+ 		msg = "{ \"command\": \"echo\", \"data\": \"Hello and welcome to RATS-TLS!\\n\" }";
+ 	else
+-		msg = "\033[94mHello and welcome to RATS-TLS!\033[0m\n";
++		msg = "Hello and welcome to RATS-TLS!\n";
+ 
+ 	size_t len = strlen(msg);
+ 	ret = rats_tls_transmit(handle, (void *)msg, &len);
+@@ -299,7 +299,7 @@ int ecall_rtls_client_startup(rats_tls_log_level_t log_level, char *attester_typ
+ 	}
+ 
+ 	if (verdictd)
+-		msg = "\033[94mHello and welcome to RATS-TLS!\033[0m\n";
++		msg = "Hello and welcome to RATS-TLS!\n";
+ 
+ 	/* Sanity check whether the response is expected */
+ 	if (strcmp(msg, buf)) {
+diff --git a/samples/virtcca-client/CMakeLists.txt b/samples/virtcca-client/CMakeLists.txt
+new file mode 100644
+index 0000000..06179e4
+--- /dev/null
++++ b/samples/virtcca-client/CMakeLists.txt
+@@ -0,0 +1,30 @@
++# Project name
++project(virtcca-client)
++
++# add_subdirectory(t_cose)
++add_subdirectory(utils)
++
++set(CMAKE_C_FLAGS "-fPIE ${CMAKE_C_FLAGS}")
++set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include
++                    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include/edl
++                    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include/rats-tls
++                    ${RATS_TLS_INSTALL_INCLUDE_PATH}
++                    ${RATS_TLS_INSTALL_INCLUDE_PATH}/edl
++                    ${CMAKE_CURRENT_SOURCE_DIR}/inc
++                    ${CMAKE_CURRENT_SOURCE_DIR}/t_cose/inc
++                    )
++set(LIBRARY_DIRS ${RATS_TLS_INSTALL_LIB_PATH})
++
++
++include_directories(${INCLUDE_DIRS})
++link_directories(${LIBRARY_DIRS})
++
++# Set source file
++set(SOURCES rats-client.c token_parse.c token_validate.c ima_measure.c)
++
++# Generate bin file
++add_executable(${PROJECT_NAME} ${SOURCES})
++target_link_libraries(${PROJECT_NAME} rats_tls utils t_cose qcbor crypto m)
++
++install(TARGETS ${PROJECT_NAME}
++	    DESTINATION ${RATS_TLS_INSTALL_BIN_PATH})
+diff --git a/samples/virtcca-client/ima_measure.c b/samples/virtcca-client/ima_measure.c
+new file mode 100644
+index 0000000..3d08ff2
+--- /dev/null
++++ b/samples/virtcca-client/ima_measure.c
+@@ -0,0 +1,421 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <errno.h>
++#include <sys/types.h>
++#include <sys/stat.h>
++#include <rats-tls/api.h>
++#include <rats-tls/log.h>
++#include <rats-tls/claim.h>
++#include <openssl/sha.h>
++#include <openssl/evp.h>
++#include <ima_measure.h>
++
++/* static int verify_sig; */
++/* static unsigned int no_sigs, unknown_keys, invalid_sigs; */
++
++static u_int8_t zero[SHA_DIGEST_LENGTH];
++static u_int8_t fox[SHA_DIGEST_LENGTH];
++static u_int8_t extend[SHA256_DIGEST_LENGTH];
++
++static int display_digest(u_int8_t * digest, u_int32_t digestlen)
++{
++	int i;
++
++	for (i = 0; i < digestlen; i++) {
++		printf("%02x", (*(digest + i) & 0xff));
++	}
++	return 0;
++}
++
++static int ima_eventdigest_parse(u_int8_t * buffer, u_int32_t buflen)
++{
++	return display_digest(buffer, SHA_DIGEST_LENGTH);
++}
++
++static int ima_eventdigest_ng_parse(u_int8_t * buffer, u_int32_t buflen)
++{
++	char hash_algo[CRYPTO_MAX_ALG_NAME + 1] = { 0 };
++	int algo_len = strlen((char *)buffer) - 1; /* format: algo + ':' + '\0' */
++	const EVP_MD *md;
++	int digest_len;
++
++	if (algo_len > CRYPTO_MAX_ALG_NAME) {
++		printf("Hash algorithm name too long\n");
++		return ERROR_ENTRY_PARSING;
++	}
++
++	printf("%s", buffer);
++
++	memcpy(hash_algo, buffer, algo_len);
++	md = EVP_get_digestbyname(hash_algo);
++	if (md == NULL) {
++		printf("Unknown hash algorithm '%s'\n", hash_algo);
++		return ERROR_ENTRY_PARSING;
++	}
++
++	digest_len = EVP_MD_size(md);
++
++	if (algo_len + 2 + digest_len != buflen) {
++		printf("Field length mismatch, current: %d, expected: %d\n",
++		       algo_len + 2 + digest_len, buflen);
++		return ERROR_ENTRY_PARSING;
++	}
++
++	return display_digest(buffer + algo_len + 2, digest_len);
++}
++
++static int ima_parse_string(u_int8_t * buffer, u_int32_t buflen)
++{
++	char *str;
++
++	/* some callers include the terminating null in the
++ 	 * buflen, others don't (eg. 'd').
++ 	 */
++	str = calloc(buflen + 1, sizeof(u_int8_t));
++	if (str == NULL) {
++		printf("Out of memory\n");
++		return -ENOMEM;
++	}
++
++	memcpy(str, buffer, buflen);
++	printf("%s", str);
++	free(str);
++	return 0;
++}
++
++static int ima_eventname_parse(u_int8_t * buffer, u_int32_t buflen)
++{
++	if (buflen > TCG_EVENT_NAME_LEN_MAX + 1) {
++		printf("Event name too long\n");
++		return -1;
++	}
++
++	return ima_parse_string(buffer, buflen);
++}
++
++static int ima_eventname_ng_parse(u_int8_t * buffer, u_int32_t buflen)
++{
++	return ima_parse_string(buffer, buflen);
++}
++
++static int ima_eventsig_parse(u_int8_t * buffer, u_int32_t buflen)
++{
++	return display_digest(buffer, buflen);
++}
++
++/* IMA template field definition */
++struct ima_template_field {
++	const char field_id[IMA_TEMPLATE_FIELD_ID_MAX_LEN];
++	int (*field_parse) (u_int8_t * buffer, u_int32_t buflen);
++};
++
++/* IMA template descriptor definition */
++struct ima_template_desc {
++	char *name;
++	char *fmt;
++	int num_fields;
++	struct ima_template_field **fields;
++};
++
++static struct ima_template_desc defined_templates[] = {
++	{.name = IMA_TEMPLATE_IMA_NAME, .fmt = IMA_TEMPLATE_IMA_FMT},
++	{.name = "ima-ng",.fmt = "d-ng|n-ng"},
++	{.name = "ima-sig",.fmt = "d-ng|n-ng|sig"},
++};
++
++static struct ima_template_field supported_fields[] = {
++	{.field_id = "d",.field_parse = ima_eventdigest_parse},
++	{.field_id = "n",.field_parse = ima_eventname_parse},
++	{.field_id = "d-ng",.field_parse = ima_eventdigest_ng_parse},
++	{.field_id = "n-ng",.field_parse = ima_eventname_ng_parse},
++	{.field_id = "sig",.field_parse = ima_eventsig_parse},
++};
++
++struct event {
++	struct {
++		u_int32_t pcr;
++		u_int8_t digest[SHA_DIGEST_LENGTH];
++		u_int32_t name_len;
++	} header;
++	char name[TCG_EVENT_NAME_LEN_MAX + 1];
++	struct ima_template_desc *template_desc; /* template descriptor */
++	u_int32_t template_data_len;
++	u_int8_t *template_data;	/* template related data */
++};
++
++static int parse_template_data(struct event *template)
++{
++	int offset = 0, result = 0;
++	int i, j, is_ima_template;
++	char *template_fmt, *template_fmt_ptr, *f;
++	u_int32_t digest_len;
++	u_int8_t *digest;
++
++	is_ima_template = strcmp(template->name, "ima") == 0 ? 1 : 0;
++	template->template_desc = NULL;
++
++	for (i = 0; i < ARRAY_SIZE(defined_templates); i++) {
++		if (strcmp(template->name,
++			defined_templates[i].name) == 0) {
++			template->template_desc = defined_templates + i;
++			break;
++		}
++	}
++
++	if (template->template_desc == NULL) {
++		i = ARRAY_SIZE(defined_templates) - 1;
++		template->template_desc = defined_templates + i;
++		template->template_desc->fmt = template->name;
++	}
++
++	template_fmt = strdup(template->template_desc->fmt);
++	if (template_fmt == NULL) {
++		printf("Out of memory\n");
++		return -ENOMEM;
++	}
++
++	template_fmt_ptr = template_fmt;
++	for (i = 0; (f = strsep(&template_fmt_ptr, "|")) != NULL; i++) {
++		struct ima_template_field *field = NULL;
++		u_int32_t field_len = 0;
++
++		for (j = 0; j < ARRAY_SIZE(supported_fields); j++) {
++			if (!strcmp(f, supported_fields[j].field_id)) {
++				field = supported_fields + j;
++				break;
++			}
++		}
++
++		if (field == NULL) {
++			result = ERROR_FIELD_NOT_FOUND;
++			printf("Field '%s' not supported\n", f);
++			goto out;
++		}
++
++		if (is_ima_template && strcmp(f, "d") == 0)
++			field_len = SHA_DIGEST_LENGTH;
++		else if (is_ima_template && strcmp(f, "n") == 0)
++			field_len = strlen(template->template_data + offset);
++		else {
++			memcpy(&field_len, template->template_data + offset,
++				 sizeof(u_int32_t));
++			offset += sizeof(u_int32_t);
++		}
++		result = field->field_parse(template->template_data + offset,
++					    field_len);
++		if (result) {
++			printf("Parsing of '%s' field failed, result: %d\n",
++			       f, result);
++			goto out;
++		} 
++
++		/* ToDo: add verifiy ima-sig template */
++
++		offset += field_len;
++		printf(" ");
++	}
++out:
++	free(template_fmt);
++	return result;
++}
++
++static int read_template_data(struct event *template, FILE *fp)
++{
++	int len, is_ima_template;
++	int byte_read;
++
++	is_ima_template = strcmp(template->name, "ima") == 0 ? 1 : 0;
++	if (!is_ima_template) {
++		byte_read = fread(&template->template_data_len, sizeof(u_int32_t), 1, fp);
++		len = template->template_data_len;
++	} else {
++		template->template_data_len = SHA_DIGEST_LENGTH +
++		    TCG_EVENT_NAME_LEN_MAX + 1;
++		/*
++		 * Read the digest only as the event name length
++		 * is not known in advance.
++		 */
++		len = SHA_DIGEST_LENGTH;
++	}
++
++	template->template_data = calloc(template->template_data_len,
++					 sizeof(u_int8_t));
++	if (template->template_data == NULL) {
++		printf("ERROR: out of memory\n");
++		return -ENOMEM;
++	}
++
++	byte_read = fread(template->template_data, len, 1, fp);
++	if (is_ima_template) {	/* finish 'ima' template data read */
++		u_int32_t field_len;
++
++		byte_read = fread(&field_len, sizeof(u_int32_t), 1, fp);
++		byte_read = fread(template->template_data + SHA_DIGEST_LENGTH,
++		      field_len, 1, fp);
++	}
++	return 0;
++}
++
++/*
++ * Calculate the sha1 hash of data
++ */
++static void calc_digest(u_int8_t * digest, int len, void *data)
++{
++	SHA_CTX c;
++
++	/* Calc template hash for an ima entry */
++	memset(digest, 0, sizeof(*digest));
++	SHA1_Init(&c);
++	SHA1_Update(&c, data, len);
++	SHA1_Final(digest, &c);
++}
++
++static int verify_template_hash(struct event *template)
++{
++	int rc;
++
++	rc = memcmp(fox, template->header.digest, sizeof(fox));
++	if (rc != 0) {
++		u_int8_t digest[SHA_DIGEST_LENGTH];
++		memset(digest, 0, sizeof(digest));
++		calc_digest(digest, template->template_data_len,
++			    template->template_data);
++		rc = memcmp(digest, template->header.digest, sizeof(digest));
++		if (rc != 0)
++			printf("- %s\n", "failed");
++	}
++	return rc != 0 ? 1 : 0 ;
++}
++
++/*
++ * calculate the SHA1 aggregate-pcr value based on the
++ * IMA runtime binary measurements.
++ *
++ * --validate: forces validation of the aggregrate pcr value
++ * 	     for an invalidated PCR. Replace all entries in the
++ * 	     runtime binary measurement list with 0x00 hash values,
++ * 	     which indicate the PCR was invalidated, either for
++ * 	     "a time of measure, time of use"(ToMToU) error, or a
++ *	     file open for read was already open for write, with
++ * 	     0xFF's hash value, when calculating the aggregate
++ *	     pcr value.
++ *
++ * --verify: for all IMA template entries in the runtime binary
++ * 	     measurement list, calculate the template hash value
++ * 	     and compare it with the actual template hash value.
++ * 	     
++ * 	     For records with a signature, verify the file data
++ * 	     hash against the file signature.
++ *
++ *	     Return the number of incorrect hash measurements
++ *	     and signatures.
++ *
++ * template info:  list #, PCR-register #, template hash, template name
++ *	IMA info:  IMA hash, filename hint
++ *
++ * Ouput: displays the aggregate-pcr value
++ * Return code: if verification enabled, returns number of verification
++ * 		errors.
++ */
++int ima_measure(void *data, size_t datalen, int validate, int verify)
++{
++	int ret;
++	FILE *fp;
++	struct event template;
++	u_int8_t pcr[SHA256_DIGEST_LENGTH];
++	int i, count = 0;
++	int hash_failed = 0;
++	size_t byte_read;
++	
++	fp = fopen(IMA_MEASUREMENTS_PATH, "r");
++	if (!fp) {
++		printf("fn: %s\n", IMA_MEASUREMENTS_PATH);
++		perror("Unable to open file\n");
++		return 1;
++	}
++	memset(pcr, 0, SHA256_DIGEST_LENGTH);	/* initial PCR content 0..0 */
++	memset(zero, 0, SHA_DIGEST_LENGTH);
++	memset(fox, 0xff, SHA_DIGEST_LENGTH);
++
++	printf("### PCR HASH                                  "
++		   "TEMPLATE-NAME\n");
++	while (fread(&template.header, sizeof(template.header), 1, fp)) {
++		printf("%3d %03u ", count++, template.header.pcr);
++		display_digest(template.header.digest, SHA_DIGEST_LENGTH);
++		memset(template.name, 0, sizeof(template.name));
++		byte_read = fread(template.name, template.header.name_len, 1, fp);
++		printf(" %s ", template.name);
++
++		if (read_template_data(&template, fp) < 0) {
++			RTLS_ERR("Reading of measurement entry failed\n");
++			break;
++		}
++
++		if (parse_template_data(&template) != 0) {
++			RTLS_ERR("Parsing of measurement entry failed\n");
++		}
++
++		/* Calc template hash for an ima entry */
++		SHA256_CTX sha256_ctx;
++		u_int8_t digest[SHA256_DIGEST_LENGTH] = {0};
++		SHA256_Init(&sha256_ctx);
++		SHA256_Update(&sha256_ctx, template.template_data, template.template_data_len);
++		SHA256_Final(digest, &sha256_ctx);
++
++		if (verify) {
++			if (verify_template_hash(&template) != 0) {
++				hash_failed++;
++			}
++		}
++		printf("\n");
++		free(template.template_data);
++
++		/* Extend simulated PCR with new template digest */
++		SHA256_CTX c;
++		SHA256_Init(&c);
++		SHA256_Update(&c, pcr, SHA256_DIGEST_LENGTH);
++		if (validate) {
++			if (memcmp(template.header.digest, zero, SHA_DIGEST_LENGTH) == 0)
++				memset(template.header.digest, 0xFF, SHA_DIGEST_LENGTH);
++		}
++		
++		memset(extend, 0, SHA256_DIGEST_LENGTH);
++		memcpy(extend, digest, SHA256_DIGEST_LENGTH);
++
++		SHA256_Update(&c, extend, SHA256_DIGEST_LENGTH);
++		SHA256_Final(pcr, &c);
++
++		OpenSSL_add_all_digests();
++
++		if (template.header.name_len > TCG_EVENT_NAME_LEN_MAX) {
++			printf("%d ERROR: event name too long!\n",
++			       template.header.name_len);
++			fclose(fp);
++			EVP_cleanup();
++			return 1;
++		}
++	}
++	fclose(fp);
++	EVP_cleanup();
++
++	printf("PCRAggr (re-calculated): ");
++	display_digest(pcr, SHA256_DIGEST_LENGTH);
++	printf("\n");
++
++	if (verify)	{
++		RTLS_INFO("Template hash verification: %s, failures is %d \n", !hash_failed ? "Success" : "Failed", hash_failed);
++	}
++
++	if (validate) {
++		ret = memcmp(pcr, data, datalen);
++		RTLS_INFO("Verifying if REM of cVM token matches reference value: %s \n",
++			(ret == 0) ? "Success" : "Failed");
++		if (ret != 0) {
++			return 1;
++		}
++	}
++
++	return 0;	
++}
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/ima_measure.h b/samples/virtcca-client/inc/ima_measure.h
+new file mode 100644
+index 0000000..aeb5064
+--- /dev/null
++++ b/samples/virtcca-client/inc/ima_measure.h
+@@ -0,0 +1,17 @@
++#define TCG_EVENT_NAME_LEN_MAX	255
++#define IMA_TEMPLATE_FIELD_ID_MAX_LEN	16
++#define IMA_TEMPLATE_NUM_FIELDS_MAX	15
++#define CRYPTO_MAX_ALG_NAME 64
++
++#define IMA_TEMPLATE_IMA_NAME "ima"
++#define IMA_TEMPLATE_IMA_FMT "d|n"
++
++#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(arr[0]))
++
++#define ERROR_ENTRY_PARSING 1
++#define ERROR_FIELD_NOT_FOUND 2
++
++#define IMA_MEASUREMENTS_PATH "binary_runtime_measurements"
++
++
++int ima_measure(void *data, size_t datalen, int validate, int verify);
+diff --git a/samples/virtcca-client/inc/token_parse.h b/samples/virtcca-client/inc/token_parse.h
+new file mode 100644
+index 0000000..99b10d8
+--- /dev/null
++++ b/samples/virtcca-client/inc/token_parse.h
+@@ -0,0 +1,104 @@
++#ifndef TOKEN_PARSE_H
++#define TOKEN_PARSE_H
++
++#include "qcbor/qcbor.h"
++#include "qcbor/qcbor_spiffy_decode.h"
++
++#define ATTEST_MAX_TOKEN_SIZE 4096
++
++#define TAG_CCA_TOKEN                       (399)
++#define CCA_PLAT_TOKEN                      (44234)
++#define CCA_CVM_TOKEN                       (44241)
++
++#define CCA_CVM_CHALLENGE                   (10)
++#define CCA_CVM_PERSONALIZATION_VALUE       (44235)
++#define CCA_CVM_HASH_ALGO_ID                (44236)
++#define CCA_CVM_PUB_KEY                     (44237)
++#define CCA_CVM_INITIAL_MEASUREMENT         (44238)
++#define CCA_CVM_EXTENSIBLE_MEASUREMENTS     (44239)
++#define CCA_CVM_EXTED_MEAS_SLOTS_NUM        (4)
++#define CCA_CVM_PUB_KEY_HASH_ALGO_ID        (44240)
++
++#define CCA_BYTE_SIZE_32    (32)
++#define CCA_BYTE_SIZE_48    (48)
++#define CCA_BYTE_SIZE_64    (64)
++
++#define CCA_BYTE_SIZE_33    (33)
++#define CCA_BYTE_SIZE_97    (97)
++
++#define CCA_BYTE_SIZE_550   (550)
++
++#define VIRTCCA_SUCCESS     (0)
++#define VIRTCCA_ERROR       (1)
++
++#define CCA_CVM_CLAIM_CNT   (7)
++
++typedef struct q_useful_buf_c qbuf_t;
++
++/*
++ * DEN0137 Realm Management Monitor Specification (1.0-eac5)
++ *
++ * CCA attestation token {                     // Tag: 399 (cca-token-collection)
++ *     CVM token {                             // 44241
++ *         COSE_Sign1 envelop {                // 18 (COSE_Sign1)
++ *             Protected headers
++ *             Unprotected headers
++ *             CVM token claim map {           // Payload
++ *                 challenge                   // 10
++ *                 rpv                         // 44235
++ *                 rim                         // 44238
++ *                 rem[4]                      // 44239
++ *                 cvm_hash_algo_id            // 44236
++ *                 pub_key                     // 44237
++ *                 pub_key_hash_algo_id        // 44240
++ *             }
++ *             Signature(RAK)
++ *         }
++ *     }
++ * }
++*/
++
++typedef struct {
++    qbuf_t component_type; /* t */
++    qbuf_t measurement; /* b */
++    qbuf_t version; /* t */
++    qbuf_t signer_id; /* b */
++    qbuf_t hash_algo_id; /* t */
++} sw_comp_claims_t;
++
++typedef struct {
++    qbuf_t challenge;                   /* 10 */
++    qbuf_t rpv;                         /* 44235 */
++    qbuf_t rim;                         /* 44238 */
++    qbuf_t rem[4];                      /* 44239 */
++    qbuf_t hash_algo_id;                /* 44236 */
++    qbuf_t pub_key;                     /* 44237 */
++    qbuf_t pub_key_hash_algo_id;        /* 44240 */
++} cvm_claims_t;
++
++typedef struct {
++    qbuf_t p_headers;
++    qbuf_t np_headers;
++    qbuf_t payload;
++    qbuf_t signature;
++} cose_sign1_envelop_t;
++
++typedef struct {
++    cose_sign1_envelop_t cvm_envelop;
++    qbuf_t               cvm_cose;
++    cvm_claims_t         cvm_token;
++} cca_token_t;
++
++#define MAX_TOKEN_SIZE (4096U)
++
++typedef struct {
++    uint8_t buf[MAX_TOKEN_SIZE];
++    size_t buf_size;
++} cca_token_buf_t;
++
++uint64_t parse_cca_attestation_token(cca_token_t *token,
++                                     uint8_t *raw_token, size_t raw_token_size);
++void print_cca_attestation_token(const cca_token_t *token);
++void print_cca_attestation_token_raw(const cca_token_t *token);
++
++#endif /* TOKEN_PARSE_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/token_validate.h b/samples/virtcca-client/inc/token_validate.h
+new file mode 100644
+index 0000000..890618f
+--- /dev/null
++++ b/samples/virtcca-client/inc/token_validate.h
+@@ -0,0 +1,40 @@
++#ifndef TOKEN_VALIDATE_H
++#define TOKEN_VALIDATE_H
++
++#include <openssl/x509.h>
++#include "t_cose/q_useful_buf.h"
++#include "token_parse.h"
++
++/* Store the virtCCA certs downloaded from HUAWEI PKI */
++#define DEFAULT_ROOT_CERT_URL "\"https://download.huawei.com/dl/download.do?actionFlag=download&nid=PKI1000000002&partNo=3001&mid=SUP_PKI\""
++#define DEFAULT_SUB_CERT_URL "\"https://download.huawei.com/dl/download.do?actionFlag=download&nid=PKI1000000040&partNo=3001&mid=SUP_PKI\""
++
++#define DEFAULT_CERT_PEM_PREFIX "."
++#define DEFAULT_ROOT_CERT_PEM_FILENAME "root_cert.pem"
++#define DEFAULT_SUB_CERT_PEM_FILENAME "sub_cert.pem"
++#define DEFAULT_AIK_CERT_PEM_FILENAME "aik_cert.pem"
++#define MAX_FILE_NAME_SIZE 100
++#define MAX_FILE_PATH_SIZE 1000
++#define MAX_URL_SIZE 1000
++
++typedef struct {
++    char cert_path_prefix[MAX_FILE_PATH_SIZE];
++    char root_cert_filename[MAX_FILE_NAME_SIZE];
++    char sub_cert_filename[MAX_FILE_NAME_SIZE];
++    char aik_cert_filename[MAX_FILE_NAME_SIZE];
++    char root_cert_url[MAX_URL_SIZE];
++    char sub_cert_url[MAX_URL_SIZE];
++} cert_info_t;
++
++bool validate_aik_cert_chain(X509 *x509_aik, X509 *x509_sub, X509 *x509_root);
++
++bool verify_plat_cose_sign(qbuf_t signed_cose, X509 *x509_aik);
++
++bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key);
++
++bool verify_cca_token_signatures(cert_info_t *cert_info,
++                                qbuf_t cvm_cose,
++                                qbuf_t cvm_pub_key,
++                                qbuf_t cvm_pub_key_algo);
++
++#endif /* TOKEN_VALIDATE_H */
+diff --git a/samples/virtcca-client/rats-client.c b/samples/virtcca-client/rats-client.c
+new file mode 100644
+index 0000000..0588464
+--- /dev/null
++++ b/samples/virtcca-client/rats-client.c
+@@ -0,0 +1,309 @@
++/* Copyright (c) 2021 Intel Corporation
++ * Copyright (c) 2020-2021 Alibaba Cloud
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <strings.h>
++#include <getopt.h>
++#include <sys/socket.h>
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#include <unistd.h>
++#include <rats-tls/api.h>
++#include <rats-tls/log.h>
++#include <rats-tls/claim.h>
++#include "token_parse.h"
++#include "token_validate.h"
++#include "utils.h"
++#include "ima_measure.h"
++
++#define DEFAULT_PORT 1234
++#define DEFAULT_IP   "127.0.0.1"
++#define TOKEN "ATTESTATION_PASS"
++
++#define SHA256_SIZE 32
++#define SHA512_SIZE 64
++#define MAX_MEASUREMENT_SIZE SHA512_SIZE
++
++static uint8_t rim_ref[MAX_MEASUREMENT_SIZE];
++static size_t rim_ref_size = MAX_MEASUREMENT_SIZE;
++
++int user_callback(void *args)
++{
++	rtls_evidence_t *ev = (rtls_evidence_t *)args;
++	bool ret = true;
++	FILE *fp;
++	size_t byte_write;
++	int validate = 1;
++	int verify = 1;
++
++	cca_token_t token = {0};
++	cca_token_buf_t cca_token_buf = {0};
++	memcpy(&cca_token_buf, ev->cca.evidence, ev->cca.evidence_sz);
++	int i;
++	ret = parse_cca_attestation_token(&token, cca_token_buf.buf, cca_token_buf.buf_size);
++    if (ret != VIRTCCA_SUCCESS) {
++        RTLS_ERR("failed to parse virtcca token\n");
++        return ENCLAVE_VERIFIER_ERR_CBOR;
++    }
++
++	cert_info_t cert_info;
++	/* TODO: Read config files that includes certs path, rim, etc. */
++	strcpy(cert_info.cert_path_prefix, DEFAULT_CERT_PEM_PREFIX);
++    strcpy(cert_info.root_cert_filename, DEFAULT_ROOT_CERT_PEM_FILENAME);
++    strcpy(cert_info.sub_cert_filename, DEFAULT_SUB_CERT_PEM_FILENAME);
++    strcpy(cert_info.aik_cert_filename, DEFAULT_AIK_CERT_PEM_FILENAME);
++    strcpy(cert_info.root_cert_url, DEFAULT_ROOT_CERT_URL);
++    strcpy(cert_info.sub_cert_url, DEFAULT_SUB_CERT_URL);
++
++	ret = verify_cca_token_signatures(&cert_info,
++                                token.cvm_cose,
++                                token.cvm_token.pub_key,
++                                token.cvm_token.pub_key_hash_algo_id);
++	if (!ret) {
++        return false;
++    }
++
++	if (token.cvm_token.rim.len != rim_ref_size || 
++		memcmp(rim_ref, token.cvm_token.rim.ptr, token.cvm_token.rim.len)) {
++        printf("Verifying if RIM of cVM token matches reference value: Failed \n");
++		return false;
++    }
++
++	printf("verify_callback called, claims %p, claims_size %zu, args %p\n", ev->custom_claims,
++	       ev->custom_claims_length, args);
++	for (size_t i = 0; i < ev->custom_claims_length; ++i) {
++		printf("custom_claims[%zu] -> name: '%s' value_size: %zu value: '%.*s'\n", i,
++		       ev->custom_claims[i].name, ev->custom_claims[i].value_size,
++		       (int)ev->custom_claims[i].value_size, ev->custom_claims[i].value);
++		ret = (strcmp(ev->custom_claims[i].name, "ima") == 0);
++		if (ret) {
++			fp = fopen(IMA_MEASUREMENTS_PATH, "w");
++			byte_write = fwrite(ev->custom_claims[i].value, ev->custom_claims[i].value_size, 1, fp);
++			fclose(fp);
++			if (ima_measure((void *) token.cvm_token.rem[0].ptr, token.cvm_token.rem[0].len, validate, verify) != 0) {
++				return false;
++			}
++		}
++	}
++
++	return true;
++}
++
++int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
++			    char *verifier_type, char *tls_type, char *crypto_type, bool mutual,
++			    bool provide_endorsements, char *ip, int port)
++{
++	rats_tls_conf_t conf;
++
++	memset(&conf, 0, sizeof(conf));
++	conf.log_level = log_level;
++	strcpy(conf.attester_type, attester_type);
++	strcpy(conf.verifier_type, verifier_type);
++	strcpy(conf.tls_type, tls_type);
++	strcpy(conf.crypto_type, crypto_type);
++	conf.cert_algo = RATS_TLS_CERT_ALGO_DEFAULT;
++	if (mutual)
++		conf.flags |= RATS_TLS_CONF_FLAGS_MUTUAL;
++	if (provide_endorsements)
++		conf.flags |= RATS_TLS_CONF_FLAGS_PROVIDE_ENDORSEMENTS;
++
++	/* Create a socket that uses an internet IPv4 address,
++	 * Sets the socket to be stream based (TCP),
++	 * 0 means choose the default protocol.
++	 */
++	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
++	if (sockfd < 0) {
++		RTLS_ERR("failed to call socket()\n");
++		return -1;
++	}
++
++	struct sockaddr_in s_addr;
++	memset(&s_addr, 0, sizeof(s_addr));
++	s_addr.sin_family = AF_INET;
++	s_addr.sin_port = htons(port);
++
++	/* Get the server IPv4 address from the command line call */
++	if (inet_pton(AF_INET, ip, &s_addr.sin_addr) != 1) {
++		RTLS_ERR("invalid server address\n");
++		return -1;
++	}
++
++	/* Connect to the server */
++	if (connect(sockfd, (struct sockaddr *)&s_addr, sizeof(s_addr)) == -1) {
++		RTLS_ERR("failed to call connect()\n");
++		return -1;
++	}
++
++	rats_tls_handle handle;
++	rats_tls_err_t ret = rats_tls_init(&conf, &handle);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to initialize rats tls %#x\n", ret);
++		return -1;
++	}
++
++	ret = rats_tls_set_verification_callback(&handle, user_callback);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to set verification callback %#x\n", ret);
++		return -1;
++	}
++
++	ret = rats_tls_negotiate(handle, sockfd);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to negotiate %#x\n", ret);
++		goto err;
++	}
++
++	const char *msg = TOKEN;
++
++	size_t len = strlen(msg);
++	ret = rats_tls_transmit(handle, (void *)msg, &len);
++	if (ret != RATS_TLS_ERR_NONE || len != strlen(msg)) {
++		RTLS_ERR("Failed to transmit %#x\n", ret);
++		goto err;
++	}
++
++	char buf[1024];
++	len = sizeof(buf);
++	ret = rats_tls_receive(handle, buf, &len);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to receive %#x\n", ret);
++		goto err;
++	}
++
++	if (len >= sizeof(buf))
++		len = sizeof(buf) - 1;
++	buf[len] = '\0';
++
++	/* Server not running in SGX Enlcave will only send hello message to client */
++	printf("Sent to Server: %s\n", msg);
++	printf("Received from Server: %s\n", buf);
++
++	shutdown(sockfd, SHUT_RDWR);
++	close(sockfd);
++	ret = rats_tls_cleanup(handle);
++	if (ret != RATS_TLS_ERR_NONE)
++		RTLS_ERR("Failed to cleanup %#x\n", ret);
++
++	return ret;
++
++err:
++	/* Ignore the error code of cleanup in order to return the prepositional error */
++	shutdown(sockfd, SHUT_RDWR);
++	close(sockfd);
++	rats_tls_cleanup(handle);
++
++	return -1;
++}
++
++int main(int argc, char **argv)
++{
++	char *const short_options = "a:v:t:c:mel:i:p:r:h";
++	// clang-format off
++	struct option long_options[] = {
++		{ "attester", required_argument, NULL, 'a' },
++		{ "verifier", required_argument, NULL, 'v' },
++		{ "tls", required_argument, NULL, 't' },
++		{ "crypto", required_argument, NULL, 'c' },
++		{ "mutual", no_argument, NULL, 'm' },
++		{ "endorsements", no_argument, NULL, 'e' },
++		{ "log-level", required_argument, NULL, 'l' },
++		{ "ip", required_argument, NULL, 'i' },
++		{ "port", required_argument, NULL, 'p' },
++		{ "rim", required_argument, NULL, 'r' },
++		{ "help", no_argument, NULL, 'h' },
++		{ 0, 0, 0, 0 }
++	};
++	// clang-format on
++
++	char *attester_type = "";
++	char *verifier_type = "";
++	char *tls_type = "";
++	char *crypto_type = "";
++	bool mutual = false;
++	bool provide_endorsements = false;
++	rats_tls_log_level_t log_level = RATS_TLS_LOG_LEVEL_INFO;
++	char *srv_ip = DEFAULT_IP;
++	int port = DEFAULT_PORT;
++	char *rim = "";
++	int opt;
++
++	do {
++		opt = getopt_long(argc, argv, short_options, long_options, NULL);
++		switch (opt) {
++		case 'a':
++			attester_type = optarg;
++			break;
++		case 'v':
++			verifier_type = optarg;
++			break;
++		case 't':
++			tls_type = optarg;
++			break;
++		case 'c':
++			crypto_type = optarg;
++			break;
++		case 'm':
++			mutual = true;
++			break;
++		case 'e':
++			provide_endorsements = true;
++			break;
++		case 'l':
++			if (!strcasecmp(optarg, "debug"))
++				log_level = RATS_TLS_LOG_LEVEL_DEBUG;
++			else if (!strcasecmp(optarg, "info"))
++				log_level = RATS_TLS_LOG_LEVEL_INFO;
++			else if (!strcasecmp(optarg, "warn"))
++				log_level = RATS_TLS_LOG_LEVEL_WARN;
++			else if (!strcasecmp(optarg, "error"))
++				log_level = RATS_TLS_LOG_LEVEL_ERROR;
++			else if (!strcasecmp(optarg, "fatal"))
++				log_level = RATS_TLS_LOG_LEVEL_FATAL;
++			else if (!strcasecmp(optarg, "off"))
++				log_level = RATS_TLS_LOG_LEVEL_NONE;
++			break;
++		case 'i':
++			srv_ip = optarg;
++			break;
++		case 'p':
++			port = atoi(optarg);
++			break;
++		case 'r':
++			rim = optarg;
++			if (hex_to_bytes(rim, strlen(rim), rim_ref, &rim_ref_size) != 0) {
++				exit(1);
++			}
++			break;
++		case -1:
++			break;
++		case 'h':
++			puts("    Usage:\n\n"
++			     "        rats-tls-client <options> [arguments]\n\n"
++			     "    Options:\n\n"
++			     "        --attester/-a value   set the type of quote attester\n"
++			     "        --verifier/-v value   set the type of quote verifier\n"
++			     "        --tls/-t value        set the type of tls wrapper\n"
++			     "        --crypto/-c value     set the type of crypto wrapper\n"
++			     "        --mutual/-m           set to enable mutual attestation\n"
++			     "        --endorsements/-e     set to let attester provide endorsements\n"
++			     "        --log-level/-l        set the log level\n"
++			     "        --ip/-i               set the listening ip address\n"
++			     "        --port/-p             set the listening tcp port\n"
++			     "        --rim/-r              set the initial measurement of cVM\n"
++			     "        --help/-h             show the usage\n");
++			exit(1);
++		default:
++			exit(1);
++		}
++	} while (opt != -1);
++
++	global_log_level = log_level;
++
++	return rats_tls_client_startup(log_level, attester_type, verifier_type, tls_type,
++				       crypto_type, mutual, provide_endorsements, srv_ip, port);
++}
+diff --git a/samples/virtcca-client/token_parse.c b/samples/virtcca-client/token_parse.c
+new file mode 100644
+index 0000000..1468c4a
+--- /dev/null
++++ b/samples/virtcca-client/token_parse.c
+@@ -0,0 +1,382 @@
++#include "token_parse.h"
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++static bool check_item_type_size(const QCBORItem *item, int data_type,
++                                 const int *sizes, int num_sizes)
++{
++    if (item->uDataType != data_type) {
++        return false;
++    }
++    if (sizes != NULL && num_sizes > 0) {
++        for (int i = 0; i < num_sizes; ++i) {
++            if (item->val.string.len == sizes[i]) {
++                return true;
++            }
++        }
++        return false;
++    } else {
++        return true;
++    }
++}
++
++static inline bool check_item_array_count(const QCBORItem *item, int count)
++{
++    if (item->uDataType != QCBOR_TYPE_ARRAY || count != item->val.uCount) {
++        return false;
++    } else {
++        return true;
++    }
++}
++
++static inline bool check_item_bstring_size(const QCBORItem *item, const int *sizes, int num_sizes)
++{
++    return check_item_type_size(item, QCBOR_TYPE_BYTE_STRING, sizes, num_sizes);
++}
++
++static inline bool check_item_tstring_size(const QCBORItem *item, const int *sizes, int num_sizes)
++{
++    return check_item_type_size(item, QCBOR_TYPE_TEXT_STRING, sizes, num_sizes);
++}
++
++static uint64_t parse_cvm_claims(cvm_claims_t *claim,
++                                 qbuf_t *raw)
++{
++    QCBORItem item;
++    QCBORDecodeContext decode_context;
++    uint8_t *_;
++    QCBORError ret = QCBOR_SUCCESS;
++    int claim_cnt = 0;
++
++    QCBORDecode_Init(&decode_context, *raw, QCBOR_DECODE_MODE_NORMAL);
++    QCBORDecode_EnterBstrWrapped(&decode_context, QCBOR_TAG_REQUIREMENT_NOT_A_TAG, NULL);
++    QCBORDecode_VGetNext(&decode_context, &item);
++    if (item.uDataType != QCBOR_TYPE_MAP) {
++        printf("Attestation token error formatting: Invalid cvm claim map format\n");
++        return VIRTCCA_ERROR;
++    }
++
++    while (ret == QCBOR_SUCCESS) {
++        QCBORDecode_VGetNext(&decode_context, &item);
++        ret = QCBORDecode_GetError(&decode_context);
++        if (ret != QCBOR_SUCCESS) {
++            break;
++        }
++    
++        if (item.uLabelType == QCBOR_TYPE_INT64) {
++            claim_cnt = claim_cnt + 1;
++            switch (item.label.int64) {
++                case CCA_CVM_CHALLENGE:
++                    if (!check_item_bstring_size(&item, (int[]){CCA_BYTE_SIZE_64}, 1)) {
++                        printf("cVM challenge is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->challenge = item.val.string;
++                    break;
++
++                case CCA_CVM_PERSONALIZATION_VALUE:
++                    if (!check_item_bstring_size(&item, (int[]){CCA_BYTE_SIZE_64}, 1)) {
++                        printf("cVM personalization value is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->rpv = item.val.string;
++                    break;
++
++                case CCA_CVM_INITIAL_MEASUREMENT:
++                    if (!check_item_bstring_size(&item,
++                            (int[]){CCA_BYTE_SIZE_32, CCA_BYTE_SIZE_48, CCA_BYTE_SIZE_64}, 3)) {
++                        printf("cVM initial measurement is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->rim = item.val.string;
++                    break;
++
++                case CCA_CVM_EXTENSIBLE_MEASUREMENTS:
++                    if (check_item_array_count(&item, CCA_CVM_EXTED_MEAS_SLOTS_NUM)) {
++                        for (int i = 0; i < CCA_CVM_EXTED_MEAS_SLOTS_NUM; i++) {
++                            QCBORDecode_VGetNext(&decode_context, &item);
++                            if (check_item_bstring_size(&item,
++                                   (int[]){CCA_BYTE_SIZE_32, CCA_BYTE_SIZE_48, CCA_BYTE_SIZE_64}, 3)) {
++                                claim->rem[i] = item.val.string;
++                            } else {
++                                printf("cVM extensible measurement is not in expected format\n");
++                                return VIRTCCA_ERROR;
++                            }
++                        }
++                    } else {
++                        printf("cVM extensible measurement is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    break;
++
++                case CCA_CVM_PUB_KEY:
++                    if (!check_item_bstring_size(&item, (int[]){CCA_BYTE_SIZE_550}, 1)) {
++                        printf("cVM public key is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->pub_key = item.val.string;
++                    break;
++
++                case CCA_CVM_HASH_ALGO_ID:
++                    if (!check_item_tstring_size(&item, NULL, 0)) {
++                        printf("cVM hash algo is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->hash_algo_id = item.val.string;
++                    break;
++
++                case CCA_CVM_PUB_KEY_HASH_ALGO_ID:
++                    if (!check_item_tstring_size(&item, NULL, 0)) {
++                        printf("cVM public key hash algo is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->pub_key_hash_algo_id = item.val.string;
++                    break;
++
++                default:
++                    claim_cnt = claim_cnt - 1;
++                    break;
++            }
++        } else {
++            printf("Un-supported label type %d\n", item.uLabelType);
++            return VIRTCCA_ERROR;
++        }
++    }
++
++    QCBORDecode_ExitBstrWrapped(&decode_context);
++
++    if (ret == QCBOR_ERR_NO_MORE_ITEMS) {
++        if (claim_cnt != CCA_CVM_CLAIM_CNT) {
++            printf("Number of cVM claims %d is incorrect\n", claim_cnt);
++            return VIRTCCA_ERROR;
++        } else {
++            return VIRTCCA_SUCCESS;
++        }
++    } else {
++        return VIRTCCA_ERROR;
++    }
++}
++
++static uint64_t parse_cose_sign1(cose_sign1_envelop_t *envelop,
++                                 qbuf_t *raw)
++{
++    QCBORItem item;
++    QCBORDecodeContext decode_context;
++    uint8_t *_;
++    QCBORError ret;
++
++    QCBORDecode_Init(&decode_context, *raw, QCBOR_DECODE_MODE_NORMAL);
++    QCBORDecode_VGetNext(&decode_context, &item);
++
++    if (item.uDataType != QCBOR_TYPE_ARRAY || item.val.uCount != 4 ||
++        QCBORDecode_GetNthTag(&decode_context, &item, 0) != CBOR_TAG_COSE_SIGN1) {
++        printf("Attestation token error formatting: Cannot get COSE_SIGN1 envelop\n");
++        return VIRTCCA_ERROR;
++    }
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Protected headers */
++    envelop->p_headers = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Unprotected headers */
++    envelop->np_headers = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Payload */
++    envelop->payload = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Signature */
++    envelop->signature = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item);
++    ret = QCBORDecode_Finish(&decode_context);
++    if (QCBOR_ERR_NO_MORE_ITEMS != ret) {
++        printf("Unexpected return code %d\n", ret);
++        return VIRTCCA_ERROR;
++    }
++
++    return VIRTCCA_SUCCESS;
++}
++
++uint64_t parse_cca_attestation_token(cca_token_t *token, uint8_t *raw_token, size_t raw_token_size)
++{
++    uint64_t status = VIRTCCA_SUCCESS;
++    QCBORItem item;
++    QCBORDecodeContext decode_context;
++
++    qbuf_t raw_cca_token;
++    qbuf_t raw_platform_envelop;
++    qbuf_t raw_cvm_envelop;
++    errno = EIO;
++    QCBORError ret;
++
++    raw_cca_token.ptr = raw_token;
++    raw_cca_token.len = raw_token_size;
++
++    QCBORDecode_Init(&decode_context, raw_cca_token, QCBOR_DECODE_MODE_NORMAL);
++    QCBORDecode_VGetNext(&decode_context, &item);
++    if (item.uDataType != QCBOR_TYPE_MAP || item.val.uCount != 1 ||
++        QCBORDecode_GetNthTag(&decode_context, &item, 0) != TAG_CCA_TOKEN) {
++        printf("Attestation token error formatting: This may not be CCA token\n");
++        return VIRTCCA_ERROR;
++    }
++
++    QCBORDecode_VGetNext(&decode_context, &item);
++    if (item.uDataType != QCBOR_TYPE_BYTE_STRING || 
++        item.label.int64 != CCA_CVM_TOKEN) {
++        printf("Attestation token error formatting: Cannot get CVM token\n");
++        return VIRTCCA_ERROR;
++    }
++
++    raw_cvm_envelop = item.val.string;
++    token->cvm_cose = raw_cvm_envelop;
++    status = parse_cose_sign1(&token->cvm_envelop,
++                              &raw_cvm_envelop);
++    if (status != VIRTCCA_SUCCESS) {
++        printf("Failed to decode cvm COSE_Sign1 envelop\n");
++        return status;
++    }
++
++    status = parse_cvm_claims(&token->cvm_token, &token->cvm_envelop.payload);
++    if (status != VIRTCCA_SUCCESS) {
++        printf("Failed to parse cvm claim map\n");
++        return status;
++    }
++
++    QCBORDecode_VGetNext(&decode_context, &item);
++    ret =  QCBORDecode_Finish(&decode_context);
++    if (QCBOR_ERR_NO_MORE_ITEMS != ret) {
++        printf("Unexpected return code %d\n", ret);
++        return ret;
++    }
++
++    return VIRTCCA_SUCCESS;
++}
++
++void print_cca_attestation_token_raw(const cca_token_t *token)
++{
++    const uint8_t *_p;
++    int _l;
++    printf("CCA attestation token\n");
++    printf("CVM token\n");
++
++    printf("\tProtected headers: ");
++    _p = token->cvm_envelop.p_headers.ptr;
++    _l = token->cvm_envelop.p_headers.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tUn-Protected headers: ");
++    _p = token->cvm_envelop.np_headers.ptr;
++    _l = token->cvm_envelop.np_headers.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tPayload: ");
++    _p = token->cvm_envelop.payload.ptr;
++    _l = token->cvm_envelop.payload.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tSignature: ");
++    _p = token->cvm_envelop.signature.ptr;
++    _l = token->cvm_envelop.signature.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n\n");
++}
++
++void print_cca_attestation_token(const cca_token_t *token)
++{
++    const uint8_t *_p;
++    int _l;
++
++    printf("Parsed CCA attestation token\n");
++    printf("CVM token\n");
++
++    printf("\tChallenge: ");
++    _p = token->cvm_token.challenge.ptr;
++    _l = token->cvm_token.challenge.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tRPV: ");
++    _p = token->cvm_token.rpv.ptr;
++    _l = token->cvm_token.rpv.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tRIM: ");
++    _p = token->cvm_token.rim.ptr;
++    _l = token->cvm_token.rim.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[0]: ");
++    _p = token->cvm_token.rem[0].ptr;
++    _l = token->cvm_token.rem[0].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[1]: ");
++    _p = token->cvm_token.rem[1].ptr;
++    _l = token->cvm_token.rem[1].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[2]: ");
++    _p = token->cvm_token.rem[2].ptr;
++    _l = token->cvm_token.rem[2].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[3]: ");
++    _p = token->cvm_token.rem[3].ptr;
++    _l = token->cvm_token.rem[3].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tHash Algo ID: ");
++    _p = token->cvm_token.hash_algo_id.ptr;
++    _l = token->cvm_token.hash_algo_id.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%c", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tPublic Key: ");
++    _p = token->cvm_token.pub_key.ptr;
++    _l = token->cvm_token.pub_key.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tPublic Key Hash Algo ID: ");
++    _p = token->cvm_token.pub_key_hash_algo_id.ptr;
++    _l = token->cvm_token.pub_key_hash_algo_id.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%c", _p[i]);
++    }
++    printf("\n");
++}
+diff --git a/samples/virtcca-client/token_validate.c b/samples/virtcca-client/token_validate.c
+new file mode 100644
+index 0000000..219af82
+--- /dev/null
++++ b/samples/virtcca-client/token_validate.c
+@@ -0,0 +1,328 @@
++/* Copyright (c) 2022 Intel Corporation
++ * Copyright (c) 2020-2022 Alibaba Cloud
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include "token_validate.h"
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <linux/limits.h>
++#include "utils.h"
++#include <openssl/evp.h>
++#include <openssl/pem.h>
++#include "t_cose/t_cose_common.h"
++#include "t_cose/t_cose_sign1_verify.h"
++
++static enum t_cose_err_t
++init_signing_key(struct t_cose_key *key_pair,
++                 struct q_useful_buf_c pub_key)
++{
++
++    enum t_cose_err_t ret;
++    EVP_PKEY *pkey = NULL;
++
++    pkey = d2i_PUBKEY(NULL, (const unsigned char **)&(pub_key.ptr), pub_key.len);
++    if (pkey == NULL) {
++        printf("Failed to load pubkey\n");
++        ret = T_COSE_ERR_FAIL;
++        goto done;
++    }
++
++    key_pair->k.key_ptr = pkey;
++    key_pair->crypto_lib = T_COSE_CRYPTO_LIB_OPENSSL;
++    ret = T_COSE_SUCCESS;
++
++done:
++    return ret;
++}
++
++static void free_signing_key(struct t_cose_key key_pair)
++{
++    EVP_PKEY_free(key_pair.k.key_ptr);
++}
++
++static bool read_aik_cert(X509 **x509_cert)
++{
++    FILE *fp = NULL;
++    fp = fopen("./aik_cert.der", "rb");
++    if (!fp) {
++        printf("Cannot open der file\n");
++        return false;
++    }
++    *x509_cert = d2i_X509_fp(fp, x509_cert);
++    return true;
++}
++
++static bool read_x509_from_pem(const char *prefix, const char *filename, X509 **x509_cert)
++{
++    char fullpath[PATH_MAX] = {0};
++    FILE *pFile = NULL;
++
++    snprintf(fullpath, sizeof(fullpath), "%s/%s", prefix, filename);
++    pFile = fopen(fullpath, "re");
++    if (!pFile) {
++        printf("Cannot open pem file %s", fullpath);
++        return false;
++    }
++
++    *x509_cert = PEM_read_X509(pFile, NULL, NULL, NULL);
++    if (!x509_cert) {
++        printf("Failed to read x509 from file: %s\n", fullpath);
++        fclose(pFile);
++        return false;
++    }
++
++    fclose(pFile);
++    return true;
++}
++
++static bool x509_validate_signature(X509 *child_cert, X509 *intermediate_cert, X509 *parent_cert)
++{
++    bool ret = false;
++    X509_STORE *store = NULL;
++    X509_STORE_CTX *store_ctx = NULL;
++
++    /* Create the store */
++    store = X509_STORE_new();
++    if (!store)
++        goto err;
++
++    /* Add the parent cert to the store */
++    if (X509_STORE_add_cert(store, parent_cert) != 1) {
++        printf("Failed to add parent_cert to x509_store\n");
++        goto err;
++    }
++
++    /* Add the intermediate cert to the store */
++    if (intermediate_cert) {
++        if (X509_STORE_add_cert(store, intermediate_cert) != 1) {
++            printf("Failed to add intermediate_cert to x509_store\n");
++            goto err;
++        }
++    }
++
++    /* Create the store context */
++    store_ctx = X509_STORE_CTX_new();
++    if (!store_ctx) {
++        printf("Failed to create x509_store_context\n");
++        goto err;
++    }
++
++    /* Pass the store (parent and intermediate cert) and child cert (need
++     * to be verified) into the store context
++     */
++    if (X509_STORE_CTX_init(store_ctx, store, child_cert, NULL) != 1) {
++        printf("Failed to initialize 509_store_context\n");
++        goto err;
++    }
++
++    /* Specify which cert to verify */
++    X509_STORE_CTX_set_cert(store_ctx, child_cert);
++
++    /* Verify the certificate */
++    ret = X509_verify_cert(store_ctx);
++    if (ret != 1) {
++        printf("Failed to verify x509 cert: %s\n",
++            X509_verify_cert_error_string(X509_STORE_CTX_get_error(store_ctx)));
++        goto err;
++    }
++    ret = true;
++
++err:
++    if (store_ctx) {
++        X509_STORE_CTX_free(store_ctx);
++    }
++    if (store) {
++        X509_STORE_free(store);
++    }
++    return ret;
++}
++
++bool validate_aik_cert_chain(X509 *x509_aik, X509 *x509_sub, X509 *x509_root)
++{
++    bool ret;
++
++    if (x509_aik == NULL || x509_sub == NULL || x509_root == NULL) {
++        return false;
++    }
++
++    /* Verify the self-signed root-cert */
++    ret = x509_validate_signature(x509_root, NULL, x509_root);
++    if (!ret) {
++        printf("Failed to validate signature of x509_root cert\n");
++        return ret;
++    }
++
++    /* Verify the sub-cert signed by root-cert */
++    ret = x509_validate_signature(x509_sub, NULL, x509_root);
++    if (!ret) {
++        printf("Failed to validate signature of x509_sub cert\n");
++        return ret;
++    }
++
++    /* Verify the aik-cert by sub-cert */
++    ret = x509_validate_signature(x509_aik, x509_sub, x509_root);
++    if (!ret) {
++        printf("Failed to validate signature of x509_aik cert\n");
++        return ret;
++    }
++
++    return ret;
++}
++
++bool verify_cvm_pubkey(qbuf_t pub_key, X509 *x509_aik)
++{
++    bool ret = false;
++    EVP_PKEY *pkey1;
++    EVP_PKEY *pkey2;
++
++    /* Extract the AIK public key */
++    pkey1 = X509_get_pubkey(x509_aik);
++    if (!pkey1) {
++        printf("Failed to extract pub-key from aik_cert\n");
++        goto done;
++    }
++
++    pkey2 = d2i_PUBKEY(NULL, (const unsigned char **)&(pub_key.ptr), pub_key.len);
++    if (pkey2 == NULL) {
++        printf("Failed to load pubkey\n");
++        goto done;
++    }
++
++    if (!EVP_PKEY_cmp(pkey1, pkey2)) {
++        goto done;
++    }
++    ret = true;
++
++done:
++    EVP_PKEY_free(pkey1);
++    EVP_PKEY_free(pkey2);
++    return ret;
++}
++
++bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key)
++{
++    qbuf_t payload;
++    enum t_cose_err_t ret;
++    struct t_cose_key key_pair;
++    struct t_cose_sign1_verify_ctx verify_ctx;
++
++    /* Export public key to an RSA key pair */
++    ret = init_signing_key(&key_pair, pub_key);
++    if (ret != T_COSE_SUCCESS) {
++        printf("Failed to made RSA key: %d\n", ret);
++        return false;
++    }
++
++    t_cose_sign1_verify_init(&verify_ctx, 0);
++
++    t_cose_sign1_set_verification_key(&verify_ctx, key_pair);
++
++    printf("Initialized t_cose for verification and set verification key\n");
++
++    ret = t_cose_sign1_verify(&verify_ctx,
++                              signed_cose,  /* COSE to verify */
++                              &payload,  /* Payload from signed_cose */
++                              NULL);  /* Don't return parameters */
++    if (ret != T_COSE_SUCCESS) {
++        free_signing_key(key_pair);
++        printf("t_cose_sign1_verify ret: %d\n", ret);
++        return false;
++    }
++
++    free_signing_key(key_pair);
++    return true;
++}
++
++bool verify_cca_token_signatures(cert_info_t *cert_info,
++                                qbuf_t cvm_cose,
++                                qbuf_t cvm_pub_key,
++                                qbuf_t cvm_pub_key_algo)
++{
++    X509 *x509_root = X509_new();
++    X509 *x509_sub = X509_new();
++    X509 *x509_aik = X509_new();
++    bool ret;
++    unsigned int ret_bits = 0xFFFFFFFF;
++    unsigned int index = 0;
++
++    if (!x509_root || !x509_sub || !x509_aik) {
++        printf("Failed to init X509!\n");
++        return false;
++    }
++
++    /* Verify cvm signature */
++    ret = verify_cvm_cose_sign(cvm_cose, cvm_pub_key);
++    printf("Verifying if cVM token signature is signed by RAK: %s \n",
++           ret ? "Success" : "Failed");
++    if (ret == false) {
++        ret_bits &= ~(1 << index);
++    }
++    index += 1;
++
++    /* Read aik cert file */
++    if (!read_aik_cert(&x509_aik)) {
++        printf("Failed to read x509_aik cert\n");
++        ret = false;
++        ret_bits &= ~(1 << index);
++    }
++    index += 1;
++
++    /* Verify cvm pubkey */
++    ret = verify_cvm_pubkey(cvm_pub_key, x509_aik);
++    printf("Verifying if cvm pubkey matches aik pubkey: %s \n",
++           ret ? "Success" : "Failed");
++    if (ret == false) {
++        ret_bits &= ~(1 << index);
++    }
++    index += 1;
++
++    /* Download root cert */
++    if (!file_exists(cert_info->cert_path_prefix,
++                     cert_info->root_cert_filename)) {
++        download_cert_pem(cert_info->cert_path_prefix,
++                          cert_info->root_cert_filename,
++                          cert_info->root_cert_url);
++    }
++
++    if (!read_x509_from_pem(cert_info->cert_path_prefix,
++                            cert_info->root_cert_filename, &x509_root)) {
++        printf("Failed to read x509_root cert\n");
++        ret = false;
++        ret_bits &= ~(1 << index);
++    }
++    index += 1;
++
++    /* Download sub cert */
++    if (!file_exists(cert_info->cert_path_prefix,
++                     cert_info->sub_cert_filename)) {
++        download_cert_pem(cert_info->cert_path_prefix,
++                          cert_info->sub_cert_filename,
++                          cert_info->sub_cert_url);
++    }
++
++    if (!read_x509_from_pem(cert_info->cert_path_prefix,
++                            cert_info->sub_cert_filename, &x509_sub)) {
++        printf("Failed to read x509_sub cert\n");
++        ret = false;
++        ret_bits &= ~(1 << index);
++    }
++    index += 1;
++
++    ret = validate_aik_cert_chain(x509_aik, x509_sub, x509_root);
++    printf("Verifying IAK certificate chain: %s \n",
++           ret ? "Success" : "Failed");
++    if (ret == false) {
++        ret_bits &= ~(1 << index);
++    }
++
++    X509_free(x509_root);
++    X509_free(x509_sub);
++    X509_free(x509_aik);
++
++    printf("CCA token singature validate [%s]\n",
++           (ret_bits == 0xFFFFFFFF) ? "Success" : "Failed");
++    return (ret_bits == 0xFFFFFFFF);
++}
+diff --git a/samples/virtcca-client/utils/CMakeLists.txt b/samples/virtcca-client/utils/CMakeLists.txt
+new file mode 100644
+index 0000000..84d6b47
+--- /dev/null
++++ b/samples/virtcca-client/utils/CMakeLists.txt
+@@ -0,0 +1,19 @@
++cmake_minimum_required(VERSION 3.12)
++project(utils
++        DESCRIPTION "utils"
++        LANGUAGES C)
++ 
++# Built-in CMake options
++set(BUILD_SHARED_LIBS OFF CACHE BOOL "Create shared instead of static libraries")
++
++if (NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
++    message(STATUS "No build type selected, defaulting to Release")
++    set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
++endif()
++
++set(UTILS_SRC_COMMON
++    src/utils.c
++)
++
++add_library(${PROJECT_NAME} STATIC ${UTILS_SRC_COMMON})
++target_include_directories(${PROJECT_NAME} PUBLIC inc PRIVATE src)
+\ No newline at end of file
+diff --git a/samples/virtcca-client/utils/inc/utils.h b/samples/virtcca-client/utils/inc/utils.h
+new file mode 100644
+index 0000000..62d4e3b
+--- /dev/null
++++ b/samples/virtcca-client/utils/inc/utils.h
+@@ -0,0 +1,11 @@
++#ifndef UTILS_H
++#define UTILS_H
++
++#include <stdint.h>
++#include <stddef.h>
++
++int hex_to_bytes(unsigned char *in, size_t in_len, unsigned char *out, size_t *out_len);
++int download_cert_pem(const char *prefix, const char *filename, const char *url);
++int file_exists(const char *prefix, const char *filename);
++
++#endif /* UTILS_H */
+diff --git a/samples/virtcca-client/utils/src/utils.c b/samples/virtcca-client/utils/src/utils.c
+new file mode 100644
+index 0000000..67e2e2c
+--- /dev/null
++++ b/samples/virtcca-client/utils/src/utils.c
+@@ -0,0 +1,60 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h>
++#include <linux/limits.h>
++#include "utils.h"
++
++#define CMDLINE_SIZE 1000
++
++int hex_to_bytes(unsigned char *in, size_t in_len, unsigned char *out, size_t *out_len)
++{
++    int i;
++
++    if (in == NULL || out == NULL || out_len == NULL) {
++        printf("Param is NULL.");
++        return 1;
++    }
++    if (in_len % 2 != 0 || in_len / 2 > *out_len) {
++        printf("Invalid input size.\n");
++        return 1;
++    }
++    for (i = 0; i < in_len / 2; i++) {
++        if (sscanf(in + i * 2, "%2hhx", out + i) != 1) {
++            printf("Invalid input.\n");
++            return 1;
++        }
++    }
++    *out_len = i;
++
++    return 0;
++}
++
++int download_cert_pem(const char *prefix, const char *filename, const char *url)
++{
++    int count = 0;
++    char cmdline_str[CMDLINE_SIZE] = {0};
++
++    count = snprintf(cmdline_str, sizeof(cmdline_str), "wget -O %s/%s %s",
++                     prefix, filename, url);
++    if (count >= CMDLINE_SIZE) {
++        printf("Param too long.\n");
++        return 1;
++    }
++
++    if (!file_exists(prefix, filename)) {
++        if (system(cmdline_str) != 0) {
++            printf("Failed to download %s/%s\n", prefix, filename);
++            return 1;
++        }
++    }
++
++    return 0;
++}
++
++int file_exists(const char *prefix, const char *filename)
++{
++    char fullpath[PATH_MAX] = {0};
++    snprintf(fullpath, sizeof(fullpath), "%s/%s", prefix, filename);
++    return access(fullpath, F_OK) == 0;
++}
+diff --git a/samples/virtcca-server/CMakeLists.txt b/samples/virtcca-server/CMakeLists.txt
+new file mode 100644
+index 0000000..12b2ede
+--- /dev/null
++++ b/samples/virtcca-server/CMakeLists.txt
+@@ -0,0 +1,25 @@
++# Project name
++project(virtcca-server)
++
++set(CMAKE_C_FLAGS "-fPIE ${CMAKE_C_FLAGS}")
++
++set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include
++                    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include/edl
++                    ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include/rats-tls
++                    ${RATS_TLS_INSTALL_INCLUDE_PATH}
++                    ${RATS_TLS_INSTALL_INCLUDE_PATH}/edl
++                    )
++set(LIBRARY_DIRS ${RATS_TLS_INSTALL_LIB_PATH})
++
++include_directories(${INCLUDE_DIRS})
++link_directories(${LIBRARY_DIRS})
++
++# Set source file
++set(SOURCES rats-server.c)
++
++# Generate bin file
++add_executable(${PROJECT_NAME} ${SOURCES})
++target_link_libraries(${PROJECT_NAME} rats_tls)
++
++install(TARGETS ${PROJECT_NAME}
++	    DESTINATION ${RATS_TLS_INSTALL_BIN_PATH})
+diff --git a/samples/virtcca-server/rats-server.c b/samples/virtcca-server/rats-server.c
+new file mode 100644
+index 0000000..e48723c
+--- /dev/null
++++ b/samples/virtcca-server/rats-server.c
+@@ -0,0 +1,350 @@
++/* Copyright (c) 2021 Intel Corporation
++ * Copyright (c) 2020-2021 Alibaba Cloud
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <stdlib.h>
++#include <stdio.h>
++#include <string.h>
++#include <strings.h>
++#include <getopt.h>
++#include <errno.h>
++#include <unistd.h>
++#include <sys/socket.h>
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <rats-tls/api.h>
++#include <rats-tls/log.h>
++#include <rats-tls/claim.h>
++
++#define DEFAULT_PORT 1234
++#define DEFAULT_IP   "0.0.0.0" /* Listern to connections from any ip */
++#define TOKEN "ATTESTATION_PASS"
++#define IMA_MEASUREMENTS_PATH "/sys/kernel/security/ima/binary_runtime_measurements"
++#define IMA_READ_BLCOK_SIZE 1024
++
++rats_tls_err_t read_ima_measurements(uint8_t **value, size_t *size)
++{
++	FILE *file;
++	uint8_t buffer[IMA_READ_BLCOK_SIZE];
++	size_t byte_read;
++
++	file = fopen(IMA_MEASUREMENTS_PATH, "rb");
++	if (file == NULL) {
++		RTLS_ERR("Error opening file: %s\n", strerror(errno));
++		return RATS_TLS_ERR_INVALID;
++	}
++	RTLS_INFO("file opened: %s\n", IMA_MEASUREMENTS_PATH);
++
++	while ((byte_read = fread(buffer, 1, IMA_READ_BLCOK_SIZE, file)) > 0) {
++		uint8_t *content = realloc(*value, *size + byte_read);
++		if (content == NULL) {
++			free(*value);
++			RTLS_ERR("memory reallocation failed");
++			return RATS_TLS_ERR_NO_MEM;
++		}
++
++		*value = content;
++		memcpy(*value + *size, buffer, byte_read);
++		*size += byte_read;
++	}
++
++	fclose(file);
++	return RATS_TLS_ERR_NONE;
++}
++
++int rats_tls_server_startup(rats_tls_log_level_t log_level, char *attester_type,
++			    char *verifier_type, char *tls_type, char *crypto_type, bool mutual,
++				bool ima, bool provide_endorsements, char *ip, int port)
++{
++	rats_tls_conf_t conf;
++	rats_tls_err_t ret;
++	uint8_t *ima_meas = NULL;
++	size_t ima_size = 0;
++    char pass_token[] = TOKEN;
++    int pass_token_len = sizeof(pass_token);
++	memset(&conf, 0, sizeof(conf));
++	conf.log_level = log_level;
++	strcpy(conf.attester_type, attester_type);
++	strcpy(conf.verifier_type, verifier_type);
++	strcpy(conf.tls_type, tls_type);
++	strcpy(conf.crypto_type, crypto_type);
++
++	conf.cert_algo = RATS_TLS_CERT_ALGO_DEFAULT;
++	conf.flags |= RATS_TLS_CONF_FLAGS_SERVER;
++	if (mutual)
++		conf.flags |= RATS_TLS_CONF_FLAGS_MUTUAL;
++	if (ima)
++		ret = read_ima_measurements(&ima_meas, &ima_size);
++		if (ret == 0 && ima_size != 0) {
++			RTLS_INFO("read %zu bytes from binary_runtime_measurements\n", ima_size);
++			claim_t custom_claims[1] = {
++				{ .name = "ima", .value = ima_meas, .value_size = ima_size }
++			};
++			conf.custom_claims = (claim_t *)custom_claims;
++			conf.custom_claims_length = 1;
++			RTLS_INFO("Step\n");
++		} else {
++			RTLS_ERR("failed to read binary_runtime_measurements\n");
++		}
++	if (provide_endorsements)
++		conf.flags |= RATS_TLS_CONF_FLAGS_PROVIDE_ENDORSEMENTS;
++
++	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
++	if (sockfd < 0) {
++		RTLS_ERR("Failed to call socket()");
++		return -1;
++	}
++
++	int reuse = 1;
++	if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const void *)&reuse, sizeof(int)) < 0) {
++		RTLS_ERR("Failed to call setsockopt()");
++		return -1;
++	}
++
++	/* Set keepalive options */
++	int flag = 1;
++	int tcp_keepalive_time = 30;
++	int tcp_keepalive_intvl = 10;
++	int tcp_keepalive_probes = 5;
++	if (setsockopt(sockfd, SOL_SOCKET, SO_KEEPALIVE, &flag, sizeof(flag)) < 0) {
++		RTLS_ERR("Failed to call setsockopt()");
++		return -1;
++	}
++	if (setsockopt(sockfd, SOL_TCP, TCP_KEEPIDLE, &tcp_keepalive_time,
++		       sizeof(tcp_keepalive_time)) < 0) {
++		RTLS_ERR("Failed to call setsockopt()");
++		return -1;
++	}
++	if (setsockopt(sockfd, SOL_TCP, TCP_KEEPINTVL, &tcp_keepalive_intvl,
++		       sizeof(tcp_keepalive_intvl)) < 0) {
++		RTLS_ERR("Failed to call setsockopt()");
++		return -1;
++	}
++	if (setsockopt(sockfd, SOL_TCP, TCP_KEEPCNT, &tcp_keepalive_probes,
++		       sizeof(tcp_keepalive_probes)) < 0) {
++		RTLS_ERR("Failed to call setsockopt()");
++		return -1;
++	}
++
++	struct sockaddr_in s_addr;
++	memset(&s_addr, 0, sizeof(s_addr));
++	s_addr.sin_family = AF_INET;
++	s_addr.sin_addr.s_addr = inet_addr(ip);
++	s_addr.sin_port = htons(port);
++
++	/* Bind the server socket */
++	if (bind(sockfd, (struct sockaddr *)&s_addr, sizeof(s_addr)) == -1) {
++		RTLS_ERR("Failed to call bind()");
++		return -1;
++	}
++
++	/* Listen for a new connection, allow 5 pending connections */
++	if (listen(sockfd, 5) == -1) {
++		RTLS_ERR("Failed to call listen()");
++		return -1;
++	}
++
++	rats_tls_handle handle;
++
++	ret = rats_tls_init(&conf, &handle);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to initialize rats tls %#x\n", ret);
++		goto err;
++	}
++
++	ret = rats_tls_set_verification_callback(&handle, NULL);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to set verification callback %#x\n", ret);
++		goto err;
++	}
++
++	while (1) {
++		RTLS_INFO("Waiting for a connection ...\n");
++
++		/* Accept client connections */
++		struct sockaddr_in c_addr;
++		socklen_t size = sizeof(c_addr);
++
++		int connd = accept(sockfd, (struct sockaddr *)&c_addr, &size);
++		if (connd < 0) {
++			RTLS_ERR("Failed to call accept()");
++			continue;
++		}
++
++		ret = rats_tls_negotiate(handle, connd);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to negotiate %#x\n", ret);
++			continue;
++		}
++
++		RTLS_DEBUG("Client connected successfully\n");
++
++		char buf[1024];
++		size_t len = sizeof(buf);
++		ret = rats_tls_receive(handle, buf, &len);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to receive %#x\n", ret);
++			continue;
++		}
++
++		if (len >= sizeof(buf))
++			len = sizeof(buf) - 1;
++		buf[len] = '\0';
++
++		RTLS_INFO("Received from Client: %s\n", buf);
++
++        if (strncmp(buf, pass_token, pass_token_len) == 0) {
++            strcpy(buf, "Attestation Passed, Swtiching Root.....");
++            /* Reply back to the client */
++			len = sizeof(buf);
++            ret = rats_tls_transmit(handle, buf, &len);
++            if (ret != RATS_TLS_ERR_NONE) {
++                RTLS_ERR("Failed to transmit %#x\n", ret);
++            }
++            break;
++        } else {
++            strcpy(buf, "Attestation Failed, Continue.....");
++            /* Reply back to the client */
++			len = sizeof(buf);
++            ret = rats_tls_transmit(handle, buf, &len);
++            if (ret != RATS_TLS_ERR_NONE) {
++                RTLS_ERR("Failed to transmit %#x\n", ret);
++            }
++			continue;
++        }
++
++		close(connd);
++	}
++
++	if (ima_meas != NULL) {
++		free(ima_meas);
++	}
++
++	shutdown(sockfd, SHUT_RDWR);
++	close(sockfd);
++	ret = rats_tls_cleanup(handle);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to cleanup %#x\n", ret);
++		return ret;
++	} else {
++		return 0x67;
++	}
++
++err:
++	/* Ignore the error code of cleanup in order to return the prepositional error */
++	shutdown(sockfd, SHUT_RDWR);
++    close(sockfd);
++	rats_tls_cleanup(handle);
++	return -1;
++
++}
++
++int main(int argc, char **argv)
++{
++	char *const short_options = "a:v:t:c:mIel:i:p:h";
++	// clang-format off
++        struct option long_options[] = {
++                { "attester", required_argument, NULL, 'a' },
++                { "verifier", required_argument, NULL, 'v' },
++                { "tls", required_argument, NULL, 't' },
++                { "crypto", required_argument, NULL, 'c' },
++                { "mutual", no_argument, NULL, 'm' },
++				{ "ima", no_argument, NULL, 'I'},
++                { "endorsements", no_argument, NULL, 'e' },
++                { "log-level", required_argument, NULL, 'l' },
++                { "ip", required_argument, NULL, 'i' },
++                { "port", required_argument, NULL, 'p' },
++                { "help", no_argument, NULL, 'h' },
++                { 0, 0, 0, 0 }
++        };
++	// clang-format on
++
++	char *attester_type = "";
++	char *verifier_type = "";
++	char *tls_type = "";
++	char *crypto_type = "";
++	bool mutual = false;
++	bool ima = false;
++	bool provide_endorsements = false;
++	rats_tls_log_level_t log_level = RATS_TLS_LOG_LEVEL_INFO;
++	char *ip = DEFAULT_IP;
++	int port = DEFAULT_PORT;
++	int opt;
++
++	do {
++		opt = getopt_long(argc, argv, short_options, long_options, NULL);
++		switch (opt) {
++		case 'a':
++			attester_type = optarg;
++			break;
++		case 'v':
++			verifier_type = optarg;
++			break;
++		case 't':
++			tls_type = optarg;
++			break;
++		case 'c':
++			crypto_type = optarg;
++			break;
++		case 'm':
++			mutual = true;
++			break;
++		case 'I':
++			ima = true;
++			break;
++		case 'e':
++			provide_endorsements = true;
++			break;
++		case 'l':
++			if (!strcasecmp(optarg, "debug"))
++				log_level = RATS_TLS_LOG_LEVEL_DEBUG;
++			else if (!strcasecmp(optarg, "info"))
++				log_level = RATS_TLS_LOG_LEVEL_INFO;
++			else if (!strcasecmp(optarg, "warn"))
++				log_level = RATS_TLS_LOG_LEVEL_WARN;
++			else if (!strcasecmp(optarg, "error"))
++				log_level = RATS_TLS_LOG_LEVEL_ERROR;
++			else if (!strcasecmp(optarg, "fatal"))
++				log_level = RATS_TLS_LOG_LEVEL_FATAL;
++			else if (!strcasecmp(optarg, "off"))
++				log_level = RATS_TLS_LOG_LEVEL_NONE;
++			break;
++		case 'i':
++			ip = optarg;
++			break;
++		case 'p':
++			port = atoi(optarg);
++			break;
++		case -1:
++			break;
++		case 'h':
++			puts("    Usage:\n\n"
++			     "        rats-tls-server <options> [arguments]\n\n"
++			     "    Options:\n\n"
++			     "        --attester/-a value   set the type of quote attester\n"
++			     "        --verifier/-v value   set the type of quote verifier\n"
++			     "        --tls/-t value        set the type of tls wrapper\n"
++			     "        --crypto/-c value     set the type of crypto wrapper\n"
++			     "        --mutual/-m           set to enable mutual attestation\n"
++				 "        --ima/-I              set to enable ima\n"
++			     "        --endorsements/-e     set to let attester provide endorsements\n"
++			     "        --log-level/-l        set the log level\n"
++			     "        --ip/-i               set the listening ip address\n"
++			     "        --port/-p             set the listening tcp port\n"
++			     "        --help/-h             show the usage\n");
++			exit(1);
++			/* Avoid compiling warning */
++			break;
++		default:
++			exit(1);
++		}
++	} while (opt != -1);
++
++	global_log_level = log_level;
++
++	return rats_tls_server_startup(log_level, attester_type, verifier_type, tls_type,
++				       crypto_type, mutual, ima, provide_endorsements, ip, port);
++}
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index de69760..98e75b7 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -2,9 +2,12 @@
+ set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include
+                  ${CMAKE_CURRENT_SOURCE_DIR}/include/rats-tls
+                  ${CMAKE_CURRENT_SOURCE_DIR}/include/internal
+-                 /opt/intel/sgxsdk/include
+-                 /usr/include
++                 /usr/include/
+                  )
++if(NOT VIRTCCA)
++    list(APPEND INCLUDE_DIRS /opt/intel/sgxsdk/include)
++endif()
++
+ if(SGX)
+     list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/include/edl
+                              ${CMAKE_BINARY_DIR}/src/sgx/trust
+@@ -121,4 +124,4 @@ set(RTLS_INCLUDE_FILES ${CMAKE_CURRENT_SOURCE_DIR}/include/rats-tls/api.h
+                        )
+ install(DIRECTORY DESTINATION ${RATS_TLS_INSTALL_INCLUDE_PATH})
+ install(FILES ${RTLS_INCLUDE_FILES}
+-DESTINATION ${RATS_TLS_INSTALL_INCLUDE_PATH})
++        DESTINATION ${RATS_TLS_INSTALL_INCLUDE_PATH})
+diff --git a/src/api/rats_tls_init.c b/src/api/rats_tls_init.c
+index 39e64cd..6ddacf6 100644
+--- a/src/api/rats_tls_init.c
++++ b/src/api/rats_tls_init.c
+@@ -121,14 +121,6 @@ rats_tls_err_t rats_tls_init(const rats_tls_conf_t *conf, rats_tls_handle *handl
+ 	if (err != RATS_TLS_ERR_NONE)
+ 		goto err_ctx;
+ 
+-	/* Check whether requiring to generate TLS certificate */
+-	if ((ctx->config.flags & RATS_TLS_CONF_FLAGS_SERVER) ||
+-	    (ctx->config.flags & RATS_TLS_CONF_FLAGS_MUTUAL)) {
+-		err = rtls_core_generate_certificate(ctx);
+-		if (err != RATS_TLS_ERR_NONE)
+-			goto err_ctx;
+-	}
+-
+ 	*handle = ctx;
+ 
+ 	RTLS_DEBUG("the handle %p returned\n", ctx);
+diff --git a/src/attesters/CMakeLists.txt b/src/attesters/CMakeLists.txt
+index 103c8d0..7bb2ca6 100644
+--- a/src/attesters/CMakeLists.txt
++++ b/src/attesters/CMakeLists.txt
+@@ -19,3 +19,7 @@ endif()
+ if(SGX)
+     add_subdirectory(sgx-la)
+ endif()
++
++if(VIRTCCA)
++    add_subdirectory(virtcca)
++endif()
+\ No newline at end of file
+diff --git a/src/attesters/api/enclave_attester_register.c b/src/attesters/api/enclave_attester_register.c
+index a59849c..a5a8fd1 100644
+--- a/src/attesters/api/enclave_attester_register.c
++++ b/src/attesters/api/enclave_attester_register.c
+@@ -12,7 +12,7 @@
+ #include "internal/cpu.h"
+ 
+ enclave_attester_err_t enclave_attester_register(const enclave_attester_opts_t *opts)
+-{
++{	
+ 	if (!opts)
+ 		return -ENCLAVE_ATTESTER_ERR_INVALID;
+ 
+@@ -26,9 +26,7 @@ enclave_attester_err_t enclave_attester_register(const enclave_attester_opts_t *
+ 			// clang-format on
+ 			return -ENCLAVE_ATTESTER_ERR_CPU_UNSUPPORTED;
+ 		}
+-	}
+-
+-	if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_SNP_GUEST) {
++	} else if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_SNP_GUEST) {
+ 		if (!is_snpguest_supported()) {
+ 			// clang-format off
+ 			RTLS_DEBUG("failed to register the attester '%s' due to lack of SNP Guest capability\n",
+@@ -36,9 +34,7 @@ enclave_attester_err_t enclave_attester_register(const enclave_attester_opts_t *
+ 			// clang-format on
+ 			return -ENCLAVE_ATTESTER_ERR_CPU_UNSUPPORTED;
+ 		}
+-	}
+-
+-	if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_SEV_GUEST) {
++	} else if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_SEV_GUEST) {
+ 		if (!is_sevguest_supported()) {
+ 			// clang-format off
+ 			RTLS_DEBUG("failed to register the attester '%s' due to lack of SEV(-ES) Guest capability\n",
+@@ -46,9 +42,7 @@ enclave_attester_err_t enclave_attester_register(const enclave_attester_opts_t *
+ 			// clang-format on
+ 			return -ENCLAVE_ATTESTER_ERR_CPU_UNSUPPORTED;
+ 		}
+-	}
+-
+-	if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_CSV_GUEST) {
++	} else if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_CSV_GUEST) {
+ 		if (!is_csvguest_supported()) {
+ 			// clang-format off
+ 			RTLS_DEBUG("failed to register the attester '%s' due to lack of CSV Guest capability\n",
+@@ -56,6 +50,21 @@ enclave_attester_err_t enclave_attester_register(const enclave_attester_opts_t *
+ 			// clang-format on
+ 			return -ENCLAVE_ATTESTER_ERR_CPU_UNSUPPORTED;
+ 		}
++	} else if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_VIRTCCA_GUEST) {
++		if (!is_virtccaguest_supported()) {
++			// clang-format off
++			RTLS_DEBUG("failed to register the attester '%s' due to lack of VirtCCA Guest capability\n",
++				   opts->type);
++			// clang-format on
++			return -ENCLAVE_ATTESTER_ERR_CPU_UNSUPPORTED;
++		}
++	} else if (opts->flags & ENCLAVE_ATTESTER_OPTS_FLAGS_VIRTCCA_FAKE) {
++		RTLS_DEBUG("ignore checking capability for attester '%s'\n", opts->type);
++	} else if (opts->flags == ENCLAVE_ATTESTER_FLAGS_DEFAULT) {
++		RTLS_DEBUG("ignore checking capability for nullattester\n");	
++	} else {
++		RTLS_DEBUG("unknown attester opts->flag '%lx'\n", opts->flags);
++		return -ENCLAVE_ATTESTER_ERR_UNKNOWN;
+ 	}
+ 
+ 	enclave_attester_opts_t *new_opts = (enclave_attester_opts_t *)malloc(sizeof(*new_opts));
+diff --git a/src/attesters/csv/collect_evidence.c b/src/attesters/csv/collect_evidence.c
+index 6707cf9..d7079c8 100644
+--- a/src/attesters/csv/collect_evidence.c
++++ b/src/attesters/csv/collect_evidence.c
+@@ -239,8 +239,7 @@ static int collect_attestation_evidence(uint8_t *hash, uint32_t hash_len,
+ 	// clang-fomat off
+ 	/* Prepare user defined data (challenge and mnonce) */
+ 	memcpy(user_data->data, hash,
+-	       hash_len <= CSV_ATTESTATION_USER_DATA_SIZE ? hash_len :
+-							    CSV_ATTESTATION_USER_DATA_SIZE);
++	       hash_len <= CSV_ATTESTATION_USER_DATA_SIZE ? hash_len : CSV_ATTESTATION_USER_DATA_SIZE);
+ 	// clang-format on
+ 
+ 	gen_random_bytes(user_data->mnonce, CSV_ATTESTATION_MNONCE_SIZE);
+diff --git a/src/attesters/csv/pre_init.c b/src/attesters/csv/pre_init.c
+index 4a4e1ea..9447192 100644
+--- a/src/attesters/csv/pre_init.c
++++ b/src/attesters/csv/pre_init.c
+@@ -11,10 +11,13 @@ enclave_attester_err_t csv_attester_pre_init(void)
+ {
+ 	RTLS_DEBUG("called\n");
+ 
+-	if (!system("wget -V >/dev/null 2>&1"))
+-		return ENCLAVE_ATTESTER_ERR_NONE;
++	enclave_attester_err_t err = ENCLAVE_ATTESTER_ERR_NONE;
+ 
+-	RTLS_ERR("Please install wget for csv attester\n");
++	char *cmdline_str = "which wget 1> /dev/null 2> /dev/null";
++	if (system(cmdline_str) != 0) {
++		RTLS_ERR("please install wget for csv attest\n");
++		err = -ENCLAVE_ATTESTER_ERR_NO_TOOL;
++	}
+ 
+-	return -ENCLAVE_ATTESTER_ERR_NO_TOOL;
++	return err;
+ }
+diff --git a/src/attesters/internal/rtls_enclave_attester_load_all.c b/src/attesters/internal/rtls_enclave_attester_load_all.c
+index 6e997ee..7aaa04e 100644
+--- a/src/attesters/internal/rtls_enclave_attester_load_all.c
++++ b/src/attesters/internal/rtls_enclave_attester_load_all.c
+@@ -41,23 +41,20 @@ rats_tls_err_t rtls_enclave_attester_load_all(void)
+ 	unsigned int total_loaded = 0;
+ 	rtls_dirent *ptr;
+ 	while ((rtls_readdir(dir, &ptr)) != 1) {
+-		const char *d_name = ptr->d_name;
+-
+-		if (!strcmp(d_name, ".") || !strcmp(d_name, ".."))
++		if (!strcmp(ptr->d_name, ".") || !strcmp(ptr->d_name, ".."))
+ 			continue;
+-
+-		if (strncmp(d_name + strlen(d_name) - strlen(PATTERN_SUFFIX), PATTERN_SUFFIX,
+-			    strlen(PATTERN_SUFFIX)))
++		if (strncmp(ptr->d_name + strlen(ptr->d_name) - strlen(PATTERN_SUFFIX),
++			    PATTERN_SUFFIX, strlen(PATTERN_SUFFIX)))
+ 			continue;
+ 
+ #ifdef OCCLUM
+ 		/* Occlum can't identify the d_type of the file, always return DT_UNKNOWN */
+-		if (strncmp(d_name + strlen(d_name) - strlen(PATTERN_SUFFIX), PATTERN_SUFFIX,
+-			    strlen(PATTERN_SUFFIX)) == 0) {
++		if (strncmp(ptr->d_name + strlen(ptr->d_name) - strlen(PATTERN_SUFFIX),
++			    PATTERN_SUFFIX, strlen(PATTERN_SUFFIX)) == 0) {
+ #else
+ 		if (ptr->d_type == DT_REG || ptr->d_type == DT_LNK) {
+ #endif
+-			if (rtls_enclave_attester_load_single(d_name) == RATS_TLS_ERR_NONE)
++			if (rtls_enclave_attester_load_single(ptr->d_name) == RATS_TLS_ERR_NONE)
+ 				++total_loaded;
+ 		}
+ 	}
+diff --git a/src/attesters/tdx-ecdsa/pre_init.c b/src/attesters/tdx-ecdsa/pre_init.c
+index c59114a..bd5d93d 100644
+--- a/src/attesters/tdx-ecdsa/pre_init.c
++++ b/src/attesters/tdx-ecdsa/pre_init.c
+@@ -4,6 +4,7 @@
+  * SPDX-License-Identifier: Apache-2.0
+  */
+ 
++#include <internal/cpu.h>
+ #include <rats-tls/attester.h>
+ #include <rats-tls/log.h>
+ 
+diff --git a/src/attesters/virtcca/CMakeLists.txt b/src/attesters/virtcca/CMakeLists.txt
+new file mode 100644
+index 0000000..4fc4818
+--- /dev/null
++++ b/src/attesters/virtcca/CMakeLists.txt
+@@ -0,0 +1,30 @@
++# Project name
++project(attester_virtcca)
++
++# Set include directory
++list(APPEND INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
++
++include_directories(${INCLUDE_DIRS})
++
++# Set dependency library directory
++set(LIBRARY_DIRS ${CMAKE_BINARY_DIR}/src
++                 ${RATS_TLS_INSTALL_LIB_PATH}
++                 )
++link_directories(${LIBRARY_DIRS})
++
++# Set source file
++set(SOURCES cleanup.c
++            collect_evidence.c
++            init.c
++            main.c
++            pre_init.c
++            )
++
++# Generate library
++add_library(${PROJECT_NAME} SHARED ${SOURCES})
++target_link_libraries(${PROJECT_NAME} ${RATS_TLS_LDFLAGS} ${RTLS_LIB} vccaattestation)
++set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${VERSION} SOVERSION ${VERSION_MAJOR})
++
++# Install library
++install(TARGETS ${PROJECT_NAME}
++        DESTINATION ${RATS_TLS_INSTALL_LIBA_PATH})
+diff --git a/src/attesters/virtcca/cleanup.c b/src/attesters/virtcca/cleanup.c
+new file mode 100644
+index 0000000..fe3ec58
+--- /dev/null
++++ b/src/attesters/virtcca/cleanup.c
+@@ -0,0 +1,14 @@
++#include <rats-tls/log.h>
++#include <rats-tls/attester.h>
++#include <attestation.h>
++
++enclave_attester_err_t virtcca_attester_cleanup(__attribute__((unused)) enclave_attester_ctx_t *ctx)
++{
++	RTLS_DEBUG("called\n");
++	
++	tsi_ctx *virtcca_ctx = (tsi_ctx *)ctx->attester_private;
++
++	tsi_free_ctx(virtcca_ctx);
++
++	return ENCLAVE_ATTESTER_ERR_NONE;
++}
+diff --git a/src/attesters/virtcca/collect_evidence.c b/src/attesters/virtcca/collect_evidence.c
+new file mode 100644
+index 0000000..2f15551
+--- /dev/null
++++ b/src/attesters/virtcca/collect_evidence.c
+@@ -0,0 +1,67 @@
++#include <rats-tls/log.h>
++#include <rats-tls/attester.h>
++#include <string.h>
++#include <attestation.h>
++#include <sys/ioctl.h>
++#include <fcntl.h>
++#include <unistd.h>
++
++#define CHALLENGE_SIZE 64
++
++enclave_attester_err_t virtcca_collect_evidence(enclave_attester_ctx_t *ctx,
++						     attestation_evidence_t *evidence,
++						     rats_tls_cert_algo_t algo, uint8_t *hash,
++						     uint32_t hash_len)
++{
++	RTLS_DEBUG("ctx %p, evidence %p, algo %d, hash %p\n", ctx, evidence, algo, hash);
++	tsi_ctx *virtcca_ctx = tsi_new_ctx();
++	if (!virtcca_ctx) {
++        RTLS_ERR("failed to open device: /dev/tsi");
++		return -ENCLAVE_ATTESTER_ERR_NO_TOOL;
++    }
++	unsigned char challenge[CHALLENGE_SIZE] = {0};
++	size_t challenge_len = CHALLENGE_SIZE;
++	size_t token_len;
++	size_t device_cert_len;
++	unsigned char *token;
++	unsigned char *device_cert;
++	virtcca_attestation_evidence_t *virtcca_token = &evidence->virtcca;
++    int ret;
++
++	/* Prepare user defined data, i.e., challenge */
++	if (hash_len > CHALLENGE_SIZE) {
++		RTLS_ERR("hash length: %d, challenge_size: %d\n", hash_len, CHALLENGE_SIZE);
++	}
++	challenge_len = hash_len <= CHALLENGE_SIZE ? hash_len : CHALLENGE_SIZE;
++	memcpy(challenge, hash, challenge_len);
++
++	token = virtcca_token->report + sizeof(token_len);
++	token_len = REPORT_MAX_LENGTH - sizeof(token_len);
++	ret = get_attestation_token(virtcca_ctx, challenge, challenge_len, token, &token_len);
++	if (ret != 0) {
++		RTLS_ERR("failed to get attestation token (%d)\n", ret);
++		tsi_free_ctx(virtcca_ctx);
++		return -ENCLAVE_ATTESTER_ERR_INVALID;
++	}
++	memcpy(virtcca_token->report, &token_len, sizeof(token_len));
++
++	device_cert = virtcca_token->report + sizeof(token_len) + token_len + sizeof(device_cert_len);
++	device_cert_len = REPORT_MAX_LENGTH - sizeof(token_len) - token_len - sizeof(device_cert_len);
++	ret = get_dev_cert(virtcca_ctx, device_cert, &device_cert_len);
++	if (ret != 0) {
++		RTLS_ERR("failed to get device cert (%d)\n", ret);
++		tsi_free_ctx(virtcca_ctx);
++		return -ENCLAVE_ATTESTER_ERR_INVALID;
++	}
++	memcpy(virtcca_token->report + sizeof(token_len) + token_len, &device_cert_len, sizeof(device_cert_len));
++
++	virtcca_token->report_len = token_len + device_cert_len + sizeof(token_len) + sizeof(device_cert_len);
++
++	tsi_free_ctx(virtcca_ctx);
++
++	snprintf(evidence->type, sizeof(evidence->type), "virtcca");
++
++	RTLS_DEBUG("ctx %p, evidence %p, report_len %d\n", ctx, evidence, evidence->sev.report_len);
++
++	return ENCLAVE_ATTESTER_ERR_NONE;
++}
+diff --git a/src/attesters/virtcca/init.c b/src/attesters/virtcca/init.c
+new file mode 100644
+index 0000000..0b72628
+--- /dev/null
++++ b/src/attesters/virtcca/init.c
+@@ -0,0 +1,29 @@
++#include <rats-tls/log.h>
++#include <rats-tls/attester.h>
++#include <attestation.h>
++#include <sys/ioctl.h>
++#include <fcntl.h>
++
++enclave_attester_err_t virtcca_attester_init(enclave_attester_ctx_t *ctx, rats_tls_cert_algo_t algo)
++{
++	RTLS_DEBUG("ctx %p, algo %d\n", ctx, algo);
++	int ret;
++	int major, minor;
++	tsi_ctx *virtcca_ctx = tsi_new_ctx();
++	if (!virtcca_ctx) {
++        RTLS_ERR("failed to open device: /dev/tsi");
++		return -ENCLAVE_ATTESTER_ERR_NO_TOOL;
++    }
++
++	ret = get_version(virtcca_ctx, &major, &minor);
++    if (ret != 0) {
++        RTLS_ERR("failed to get TSI version (%d)", ret);
++        return -ENCLAVE_ATTESTER_ERR_INVALID;
++    }
++
++    RTLS_DEBUG("TSI version %d.%d advertised\n", major, minor);
++
++	ctx->attester_private = virtcca_ctx;
++
++	return ENCLAVE_ATTESTER_ERR_NONE;
++}
+diff --git a/src/attesters/virtcca/main.c b/src/attesters/virtcca/main.c
+new file mode 100644
+index 0000000..89426a0
+--- /dev/null
++++ b/src/attesters/virtcca/main.c
+@@ -0,0 +1,33 @@
++#include <stdio.h>
++#include <rats-tls/attester.h>
++#include <rats-tls/log.h>
++
++extern enclave_attester_err_t enclave_attester_register(enclave_attester_opts_t *);
++extern enclave_attester_err_t virtcca_attester_pre_init(void);
++extern enclave_attester_err_t virtcca_attester_init(enclave_attester_ctx_t *,
++												 	rats_tls_cert_algo_t algo);
++extern enclave_attester_err_t virtcca_collect_evidence(enclave_attester_ctx_t *,
++													   attestation_evidence_t *,
++													   rats_tls_cert_algo_t algo, uint8_t *,
++													   uint32_t hash_len);
++extern enclave_attester_err_t virtcca_attester_cleanup(enclave_attester_ctx_t *);
++
++static enclave_attester_opts_t virtcca_attester_opts = {
++	.api_version = ENCLAVE_ATTESTER_API_VERSION_DEFAULT,
++	.flags = ENCLAVE_ATTESTER_OPTS_FLAGS_VIRTCCA_GUEST,
++	.name = "virtcca",
++	.priority = 15,
++	.pre_init = virtcca_attester_pre_init,
++	.init = virtcca_attester_init,
++	.collect_evidence = virtcca_collect_evidence,
++	.cleanup = virtcca_attester_cleanup,
++};
++
++void __attribute__((constructor)) libattester_virtcca_init(void)
++{
++	RTLS_DEBUG("called\n");
++
++	enclave_attester_err_t err = enclave_attester_register(&virtcca_attester_opts);
++	if (err != ENCLAVE_ATTESTER_ERR_NONE)
++		RTLS_DEBUG("failed to register the enclave attester 'virtcca' %#x\n", err);
++}
+diff --git a/src/attesters/virtcca/pre_init.c b/src/attesters/virtcca/pre_init.c
+new file mode 100644
+index 0000000..0fd3c55
+--- /dev/null
++++ b/src/attesters/virtcca/pre_init.c
+@@ -0,0 +1,9 @@
++#include <rats-tls/log.h>
++#include <rats-tls/attester.h>
++
++enclave_attester_err_t virtcca_attester_pre_init(void)
++{
++	RTLS_DEBUG("called\n");
++
++	return ENCLAVE_ATTESTER_ERR_NONE;
++}
+diff --git a/src/core/cpu.c b/src/core/cpu.c
+index ad48924..f1d53cf 100644
+--- a/src/core/cpu.c
++++ b/src/core/cpu.c
+@@ -20,7 +20,7 @@
+ #include "rtls_t.h"
+ #endif
+ // clang-format on
+-
++#ifndef __aarch64__ /* AARCH64 */
+ #ifndef SGX
+ // clang-format off
+ static inline void cpuid(int *eax, int *ebx, int *ecx, int *edx)
+@@ -51,10 +51,12 @@ static bool is_sgx_device(const char *dev)
+ {
+ 	struct stat st;
+ 
+-	if (stat(dev, &st))
+-		return false;
++	if (!stat(dev, &st)) {
++		if ((st.st_mode & S_IFCHR) && (major(st.st_rdev) == SGX_DEVICE_MAJOR_NUM))
++			return true;
++	}
+ 
+-	return (st.st_mode & S_IFCHR) && (major(st.st_rdev) == SGX_DEVICE_MAJOR_NUM);
++	return false;
+ }
+ 
+ static bool is_legacy_oot_kernel_driver(void)
+@@ -194,7 +196,6 @@ bool is_tdguest_supported(void)
+ static uint64_t read_msr(uint32_t reg)
+ {
+ 	int fd = open("/dev/cpu/0/msr", O_RDONLY);
+-
+ 	if (fd < 0) {
+ 		RTLS_ERR("failed to open msr\n");
+ 		return 0;
+@@ -203,7 +204,7 @@ static uint64_t read_msr(uint32_t reg)
+ 	uint64_t data;
+ 	if (pread(fd, &data, sizeof(data), reg) != sizeof(data)) {
+ 		close(fd);
+-		RTLS_ERR("failed to read msr %#x\n", reg);
++		RTLS_DEBUG("failed to read msr %#x\n", reg);
+ 		return 0;
+ 	}
+ 
+@@ -213,39 +214,26 @@ static uint64_t read_msr(uint32_t reg)
+ }
+ #endif
+ 
+-static bool is_amd_cpu(void)
+-{
+-	int cpu_info[4] = { 0, 0, 0, 0 };
+-
+-	__cpuidex(cpu_info, 0, 0);
+-
+-	/* The twelve 8-bit ASCII character codes that form the
+-	 * string "AuthenticAMD".
+-	 */
+-	return (cpu_info[1] == 0x68747541 && cpu_info[2] == 0x444d4163 &&
+-		cpu_info[3] == 0x69746e65);
+-}
++#define X86_CPUID_VENDOR_HygonGenuine_ebx 0x6f677948
++#define X86_CPUID_VENDOR_HygonGenuine_ecx 0x656e6975
++#define X86_CPUID_VENDOR_HygonGenuine_edx 0x6e65476e
+ 
+-static bool is_hygon_cpu(void)
++/* check CPU vendor of the guest */
++bool is_hygon_cpu(void)
+ {
+ 	int cpu_info[4] = { 0, 0, 0, 0 };
+ 
+ 	__cpuidex(cpu_info, 0, 0);
+ 
+-	/* The twelve 8-bit ASCII character codes that form the
+-         * string "HygonGenuine".
+-         */
+-	return (cpu_info[1] == 0x6f677948 && cpu_info[2] == 0x656e6975 &&
+-		cpu_info[3] == 0x6e65476e);
++	return (cpu_info[1] == X86_CPUID_VENDOR_HygonGenuine_ebx &&
++		cpu_info[2] == X86_CPUID_VENDOR_HygonGenuine_ecx &&
++		cpu_info[3] == X86_CPUID_VENDOR_HygonGenuine_edx);
+ }
+ 
+ /* check whether running in AMD SEV-SNP guest */
+ bool is_snpguest_supported(void)
+ {
+ #ifndef SGX
+-	if (!is_amd_cpu())
+-		return false;
+-
+ 	return !!(read_msr(SEV_STATUS_MSR) & (1 << SEV_SNP_FLAG));
+ #else
+ 	return false;
+@@ -256,11 +244,13 @@ bool is_snpguest_supported(void)
+ bool is_sevguest_supported(void)
+ {
+ #ifndef SGX
+-	if (!is_amd_cpu())
+-		return false;
++	if (!is_hygon_cpu()) {
++		uint64_t data = read_msr(SEV_STATUS_MSR);
+ 
+-	uint64_t data = read_msr(SEV_STATUS_MSR);
+-	return !!data || !!(data & (1 << SEV_ES_FLAG));
++		return !!data || !!(data & (1 << SEV_ES_FLAG));
++	} else {
++		return false;
++	}
+ #else
+ 	return false;
+ #endif
+@@ -270,12 +260,75 @@ bool is_sevguest_supported(void)
+ bool is_csvguest_supported(void)
+ {
+ #ifndef SGX
+-	if (!is_hygon_cpu())
+-		return false;
++	if (is_hygon_cpu()) {
++		uint64_t data = read_msr(SEV_STATUS_MSR);
+ 
+-	uint64_t data = read_msr(SEV_STATUS_MSR);
+-	return !!(data & ((1 << SEV_FLAG) | (1 << SEV_ES_FLAG)));
++		return !!(data & ((1 << SEV_FLAG) | (1 << SEV_ES_FLAG)));
++	} else {
++		return false;
++	}
+ #else
+ 	return false;
+ #endif
+ }
++
++/* check whether running in ARM VirtCCA guest */
++bool is_virtccaguest_supported(void)
++{	
++	return false;
++}
++
++#else /* AARCH64 */
++
++bool is_csvguest_supported(void)
++{
++	return false;
++}
++
++bool is_sevguest_supported(void)
++{
++	return false;
++}
++
++bool is_snpguest_supported(void)
++{
++	return false;
++}
++
++static bool is_sgx_device(const char *dev)
++{
++	return false;
++}
++
++static bool is_legacy_oot_kernel_driver(void)
++{
++	return false;
++}
++
++static bool is_in_tree_kernel_driver(void)
++{
++	return false;
++}
++
++static bool is_dcap_1_9_oot_kernel_driver(void)
++{
++	return false;
++}
++
++bool is_tdguest_supported(void)
++{
++	return false;
++}
++
++/* check whether running in ARM VirtCCA guest */
++bool is_virtccaguest_supported(void)
++{	
++	struct stat st;
++	if (stat("/dev/tsi", &st) == 0) {
++		if (S_ISCHR(st.st_mode))
++			return true;
++	}
++	return false;
++}
++
++#endif /* AARCH64 */
+\ No newline at end of file
+diff --git a/src/core/dice.c b/src/core/dice.c
+index 59b3158..f0ac171 100644
+--- a/src/core/dice.c
++++ b/src/core/dice.c
+@@ -7,10 +7,10 @@
+ #include <string.h>
+ #include <rats-tls/err.h>
+ #include <rats-tls/log.h>
++#include <internal/dice.h>
+ #include <rats-tls/cert.h>
+ #include <rats-tls/endorsement.h>
+ #include <cbor.h>
+-#include "internal/dice.h"
+ 
+ uint64_t tag_of_evidence_type(const char *type)
+ {
+@@ -26,8 +26,11 @@ uint64_t tag_of_evidence_type(const char *type)
+ 		return OCBR_TAG_EVIDENCE_SEV;
+ 	} else if (!strcmp(type, "csv")) {
+ 		return OCBR_TAG_EVIDENCE_CSV;
++	} else if (!strcmp(type, "virtcca")) {
++		return OCBR_TAG_EVIDENCE_VIRTCCA;
++	} else if (!strcmp(type, "virtcca_fake")) {
++		return OCBR_TAG_EVIDENCE_VIRTCCA;
+ 	}
+-
+ 	RTLS_FATAL("Unhandled evidence type '%s'\n", type);
+ 	return 0;
+ }
+@@ -60,6 +63,12 @@ const uint8_t *evidence_get_raw_as_ref(const attestation_evidence_t *evidence, s
+ 	} else if (!strcmp(evidence->type, "csv")) {
+ 		data = (const uint8_t *)&evidence->csv.report;
+ 		size = evidence->csv.report_len;
++	} else if (!strcmp(evidence->type, "virtcca")) {
++		data = (const uint8_t *)&evidence->virtcca.report;
++		size = evidence->virtcca.report_len;
++	} else if (!strcmp(evidence->type, "virtcca_fake")) {
++		data = (const uint8_t *)&evidence->virtcca.report;
++		size = evidence->virtcca.report_len;
+ 	} else {
+ 		RTLS_FATAL("Unhandled evidence type '%s'\n", evidence->type);
+ 		*size_out = 0;
+@@ -67,7 +76,11 @@ const uint8_t *evidence_get_raw_as_ref(const attestation_evidence_t *evidence, s
+ 	}
+ 	*size_out = (size_t)size;
+ 	if (size >= 16)
++		#if 1
++		RTLS_INFO(
++		#else
+ 		RTLS_DEBUG(
++		#endif
+ 			"evidence raw data [%zu] %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x...\n",
+ 			size, data[0], data[1], data[2], data[3], data[4], data[5], data[6],
+ 			data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14],
+@@ -79,7 +92,11 @@ int evidence_from_raw(const uint8_t *data, size_t size, uint64_t tag,
+ 		      attestation_evidence_t *evidence)
+ {
+ 	if (size >= 16)
++		#if 1
++		RTLS_INFO(
++		#else
+ 		RTLS_DEBUG(
++		#endif
+ 			"evidence raw data [%zu] %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x...\n",
+ 			size, data[0], data[1], data[2], data[3], data[4], data[5], data[6],
+ 			data[7], data[8], data[9], data[10], data[11], data[12], data[13], data[14],
+@@ -147,8 +164,12 @@ int evidence_from_raw(const uint8_t *data, size_t size, uint64_t tag,
+ 		memcpy(evidence->type, "csv", sizeof("csv"));
+ 		memcpy((uint8_t *)&evidence->csv.report, data, size);
+ 		evidence->csv.report_len = size;
++	} else if (tag == OCBR_TAG_EVIDENCE_VIRTCCA) {
++		memcpy(evidence->type, "virtcca", sizeof("virtcca"));
++		memcpy((uint8_t *)&evidence->virtcca.report, data, size);
++		evidence->virtcca.report_len = size;
+ 	}
+-
++	
+ 	return 0;
+ }
+ 
+@@ -201,6 +222,7 @@ err:
+ 
+ enclave_attester_err_t
+ dice_generate_claims_buffer(hash_algo_t pubkey_hash_algo, const uint8_t *pubkey_hash,
++				const uint8_t *nonce, size_t nonce_size, 
+ 			    const claim_t *custom_claims, size_t custom_claims_length,
+ 			    uint8_t **claims_buffer_out, size_t *claims_buffer_size_out)
+ {
+@@ -210,9 +232,8 @@ dice_generate_claims_buffer(hash_algo_t pubkey_hash_algo, const uint8_t *pubkey_
+ 	size_t pubkey_hash_value_buffer_size = 0;
+ 
+ 	/* claims-buffer: { "pubkey-hash" : h'<pubkey-hash-value>', "nonce" : h'<nonce-value>'} */
+-	/* Note that the nonce is optional, it's for per-session freshness, which we don't support it yet. */
+ 	ret = ENCLAVE_ATTESTER_ERR_NO_MEM;
+-	root = cbor_new_definite_map(1 + custom_claims_length);
++	root = cbor_new_definite_map(2 + custom_claims_length);
+ 	if (!root)
+ 		goto err;
+ 
+@@ -233,6 +254,14 @@ dice_generate_claims_buffer(hash_algo_t pubkey_hash_algo, const uint8_t *pubkey_
+ 	free(pubkey_hash_value_buffer);
+ 	pubkey_hash_value_buffer = NULL;
+ 
++	if (!cbor_map_add(root, (struct cbor_pair) {
++					.key = cbor_move(cbor_build_string(CLAIM_NONCE)),
++					.value = cbor_move(cbor_build_bytestring(
++						nonce,
++						nonce_size)) })) {
++		goto err;
++	}
++		
+ 	/* Add all user-defined claims to map */
+ 	ret = ENCLAVE_ATTESTER_ERR_NO_MEM;
+ 	for (size_t i = 0; i < custom_claims_length; i++) {
+@@ -710,7 +739,7 @@ err:
+ 	return ret;
+ }
+ 
+-/* Parse the claims buffer and return the custom claims and pubkey hash. Note that
++/* Parse the claims buffer and return the custom claims, pubkey hash, and nonce. Note that
+  * the content of the claims buffer is untrusted user input, and its format match
+  * the format defined by Interoperable RA-TLS.
+  * 
+@@ -719,6 +748,8 @@ err:
+  * pubkey_hash_algo_out: The `hash_algo_id` of pubkey `hash-entry`
+  * pubkey_hash_out: A buffer for writing pubkey hash to, should be large enough
+  *     (MAX_HASH_SIZE) to write the hash.
++ * nonce_out: A buffer for write nonce to, should be large enought to write the value.
++ * nonce_size_out: The size of nonce.
+  * custom_claims_out: The list of claims stored in the claims buffer, user-defined
+  *     custom claims included only. The caller should manage its memory.
+  * custom_claims_length_out: The length of claims list.
+@@ -726,6 +757,7 @@ err:
+ enclave_verifier_err_t
+ dice_parse_claims_buffer(const uint8_t *claims_buffer, size_t claims_buffer_size,
+ 			 hash_algo_t *pubkey_hash_algo_out, uint8_t *pubkey_hash_out,
++			 uint8_t *nonce_out, size_t *nonce_size_out,
+ 			 claim_t **custom_claims_out, size_t *custom_claims_length_out)
+ {
+ 	enclave_verifier_err_t ret;
+@@ -755,6 +787,7 @@ dice_parse_claims_buffer(const uint8_t *claims_buffer, size_t claims_buffer_size
+ 
+ 	{
+ 		bool found_pubkey_hash = false;
++		bool found_nonce = false;
+ 
+ 		/* Get claims from claims buffer */
+ 		claim_t claims[cbor_map_size(root)];
+@@ -791,6 +824,19 @@ dice_parse_claims_buffer(const uint8_t *claims_buffer, size_t claims_buffer_size
+ 				continue;
+ 			}
+ 
++			/* Check nonce */
++			if (key_length == sizeof(CLAIM_NONCE) - 1 &&
++			    !strncmp((char *)key_handle, CLAIM_NONCE, key_length)) {
++				found_nonce = true;
++
++				memcpy(nonce_out, value_handle, value_length);
++				*nonce_size_out = value_length;
++
++				/* The "nonce" is a internal claim and should not be returned to the user
++				 * of rats-tls. So we "continue" here. */
++				continue;
++			}
++
+ 			/* Put user-defined custom claims into the custom_claims list. */
+ 			claim_t *claim = &claims[count_claims];
+ 			/* NOTE: The cbor_string_handle(key) returns a non-null terminated string. And the
+@@ -824,6 +870,14 @@ dice_parse_claims_buffer(const uint8_t *claims_buffer, size_t claims_buffer_size
+ 			goto err_claims;
+ 		}
+ 
++		if (!found_nonce) {
++			RTLS_ERR(
++				"failed to find claim with name '%s' from claims list with length %zu\n",
++				CLAIM_NONCE, cbor_map_size(root));
++			ret = ENCLAVE_VERIFIER_ERR_INVALID;
++			goto err_claims;
++		}
++
+ 		custom_claims = malloc(count_claims * sizeof(claim_t));
+ 		if (!custom_claims) {
+ 			ret = ENCLAVE_VERIFIER_ERR_NO_MEM;
+diff --git a/src/core/main.c b/src/core/main.c
+index 88b8af1..24d58c9 100644
+--- a/src/core/main.c
++++ b/src/core/main.c
+@@ -25,8 +25,6 @@ rtls_core_context_t global_core_context;
+ /* The global log level used by log.h */
+ rats_tls_log_level_t global_log_level = RATS_TLS_LOG_LEVEL_DEFAULT;
+ 
+-extern rats_tls_log_level_t get_loglevel_env(const char *name);
+-
+ // clang-format off
+ #ifdef SGX
+ #define INSTANCE_NUM  (sizeof(enclave_instance_name) / sizeof(enclave_instance_name[0]))
+@@ -42,7 +40,7 @@ void __attribute__((constructor)) librats_tls_init(void)
+ {
+ 	RTLS_DEBUG("called\n");
+ 
+-	global_log_level = get_loglevel_env("RATS_TLS_GLOBAL_LOG_LEVEL");
++	global_log_level = rtls_loglevel_getenv("RATS_TLS_GLOBAL_LOG_LEVEL");
+ 	if (global_log_level == (rats_tls_log_level_t)-1) {
+ 		RTLS_FATAL("failed to get log level from env\n");
+ 		rtls_exit();
+diff --git a/src/core/rtls_common.c b/src/core/rtls_common.c
+index 7c77600..891f0d8 100644
+--- a/src/core/rtls_common.c
++++ b/src/core/rtls_common.c
+@@ -41,35 +41,41 @@ void rtls_exit(void)
+ 	ocall_exit();
+ }
+ 
+-rats_tls_log_level_t get_loglevel_env(const char *name)
++rats_tls_log_level_t rtls_loglevel_getenv(const char *name)
+ {
+-	size_t log_level_len = 8;
++	char *log_level_str = NULL;
++	size_t log_level_len = 32;
+ 
+-	char *log_level_str = calloc(1, log_level_len);
++	log_level_str = calloc(1, log_level_len);
+ 	if (!log_level_str) {
+ 		RTLS_ERR("failed to calloc log level string\n");
+ 		return -1;
+ 	}
+ 
+ 	ocall_getenv(name, log_level_str, log_level_len);
++	if (log_level_str) {
++		if (!strcmp(log_level_str, "debug") || !strcmp(log_level_str, "DEBUG")) {
++			free(log_level_str);
++			return RATS_TLS_LOG_LEVEL_DEBUG;
++		} else if (!strcmp(log_level_str, "info") || !strcmp(log_level_str, "INFO")) {
++			free(log_level_str);
++			return RATS_TLS_LOG_LEVEL_INFO;
++		} else if (!strcmp(log_level_str, "warn") || !strcmp(log_level_str, "WARN")) {
++			free(log_level_str);
++			return RATS_TLS_LOG_LEVEL_WARN;
++		} else if (!strcmp(log_level_str, "error") || !strcmp(log_level_str, "ERROR")) {
++			free(log_level_str);
++			return RATS_TLS_LOG_LEVEL_ERROR;
++		} else if (!strcmp(log_level_str, "fatal") || !strcmp(log_level_str, "FATAL")) {
++			free(log_level_str);
++			return RATS_TLS_LOG_LEVEL_FATAL;
++		} else if (!strcmp(log_level_str, "off") || !strcmp(log_level_str, "OFF")) {
++			free(log_level_str);
++			return RATS_TLS_LOG_LEVEL_NONE;
++		}
++	}
+ 
+-	rats_tls_log_level_t level = RATS_TLS_LOG_LEVEL_DEFAULT;
+-	if (!strcmp(log_level_str, "debug") || !strcmp(log_level_str, "DEBUG"))
+-		level = RATS_TLS_LOG_LEVEL_DEBUG;
+-	else if (!strcmp(log_level_str, "info") || !strcmp(log_level_str, "INFO"))
+-		level = RATS_TLS_LOG_LEVEL_INFO;
+-	else if (!strcmp(log_level_str, "warn") || !strcmp(log_level_str, "WARN"))
+-		level = RATS_TLS_LOG_LEVEL_WARN;
+-	else if (!strcmp(log_level_str, "error") || !strcmp(log_level_str, "ERROR"))
+-		level = RATS_TLS_LOG_LEVEL_ERROR;
+-	else if (!strcmp(log_level_str, "fatal") || !strcmp(log_level_str, "FATAL"))
+-		level = RATS_TLS_LOG_LEVEL_FATAL;
+-	else if (!strcmp(log_level_str, "off") || !strcmp(log_level_str, "OFF"))
+-		level = RATS_TLS_LOG_LEVEL_NONE;
+-
+-	free(log_level_str);
+-
+-	return level;
++	return RATS_TLS_LOG_LEVEL_DEFAULT;
+ }
+ 
+ rats_tls_err_t rtls_instance_init(const char *name, __attribute__((unused)) const char *realpath,
+@@ -197,25 +203,23 @@ void rtls_exit(void)
+ 	exit(EXIT_FAILURE);
+ }
+ 
+-rats_tls_log_level_t get_loglevel_env(const char *name)
++rats_tls_log_level_t rtls_loglevel_getenv(const char *name)
+ {
+-	char *log_level_str = getenv(name);
+-
+-	if (!log_level_str)
+-		return RATS_TLS_LOG_LEVEL_DEFAULT;
+-
+-	if (!strcasecmp(log_level_str, "debug"))
+-		return RATS_TLS_LOG_LEVEL_DEBUG;
+-	else if (!strcasecmp(log_level_str, "info"))
+-		return RATS_TLS_LOG_LEVEL_INFO;
+-	else if (!strcasecmp(log_level_str, "warn"))
+-		return RATS_TLS_LOG_LEVEL_WARN;
+-	else if (!strcasecmp(log_level_str, "error"))
+-		return RATS_TLS_LOG_LEVEL_ERROR;
+-	else if (!strcasecmp(log_level_str, "fatal"))
+-		return RATS_TLS_LOG_LEVEL_FATAL;
+-	else if (!strcasecmp(log_level_str, "off"))
+-		return RATS_TLS_LOG_LEVEL_NONE;
++	char *log_level_str = log_level_str = getenv(name);
++	if (log_level_str) {
++		if (!strcasecmp(log_level_str, "debug"))
++			return RATS_TLS_LOG_LEVEL_DEBUG;
++		else if (!strcasecmp(log_level_str, "info"))
++			return RATS_TLS_LOG_LEVEL_INFO;
++		else if (!strcasecmp(log_level_str, "warn"))
++			return RATS_TLS_LOG_LEVEL_WARN;
++		else if (!strcasecmp(log_level_str, "error"))
++			return RATS_TLS_LOG_LEVEL_ERROR;
++		else if (!strcasecmp(log_level_str, "fatal"))
++			return RATS_TLS_LOG_LEVEL_FATAL;
++		else if (!strcasecmp(log_level_str, "off"))
++			return RATS_TLS_LOG_LEVEL_NONE;
++	}
+ 
+ 	return RATS_TLS_LOG_LEVEL_DEFAULT;
+ }
+diff --git a/src/core/rtls_core_generate_certificate.c b/src/core/rtls_core_generate_certificate.c
+index b20db41..a4aa2c8 100644
+--- a/src/core/rtls_core_generate_certificate.c
++++ b/src/core/rtls_core_generate_certificate.c
+@@ -10,6 +10,7 @@
+ #include "internal/attester.h"
+ #include "internal/verifier.h"
+ #include "internal/dice.h"
++#include "rats-tls/nonce.h"
+ #include <string.h>
+ 
+ rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *ctx)
+@@ -21,10 +22,6 @@ rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *ctx)
+ 	    !ctx->crypto_wrapper->opts->gen_cert)
+ 		return -RATS_TLS_ERR_INVALID;
+ 
+-	/* Avoid re-generation of TLS certificates */
+-	if (ctx->flags & RATS_TLS_CTX_FLAGS_CERT_CREATED)
+-		return RATS_TLS_ERR_NONE;
+-
+ 	/* Check whether the specified algorithm is supported.
+ 	 *
+ 	 * TODO: the supported algorithm list should be provided by a crypto
+@@ -59,6 +56,15 @@ rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *ctx)
+ 	if (c_err != CRYPTO_WRAPPER_ERR_NONE)
+ 		return c_err;
+ 
++	/* Get received nonce */
++	uint8_t nonce[MAX_NONCE_SIZE];
++	size_t nonce_size = sizeof(nonce);
++	tls_wrapper_err_t t_err;
++	t_err = ctx->tls_wrapper->opts->get_nonce(ctx->tls_wrapper, true, nonce, &nonce_size);
++	if (t_err != TLS_WRAPPER_ERR_NONE) {
++		return t_err;
++	}
++
+ 	/* Collect evidence */
+ 	attestation_evidence_t evidence;
+ 	memset(&evidence, 0, sizeof(attestation_evidence_t));
+@@ -71,7 +77,7 @@ rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *ctx)
+ 	RTLS_DEBUG("fill evidence user-data field with sha256 of claims_buffer\n");
+ 	/* Generate claims_buffer */
+ 	enclave_attester_err_t a_ret = dice_generate_claims_buffer(
+-		HASH_ALGO_SHA256, hash, ctx->config.custom_claims, ctx->config.custom_claims_length,
++		HASH_ALGO_SHA256, hash, nonce, nonce_size, ctx->config.custom_claims, ctx->config.custom_claims_length,
+ 		&claims_buffer, &claims_buffer_size);
+ 	if (a_ret != ENCLAVE_ATTESTER_ERR_NONE) {
+ 		RTLS_DEBUG("generate claims_buffer failed. a_ret: %#x\n", a_ret);
+@@ -110,13 +116,13 @@ rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *ctx)
+ 		.endorsements_buffer_size = 0,
+ 	};
+ 
+-	/* Get DICE evidence buffer.
+-	 * This check is a workaround for the nullattester.
+-	 * Note: For nullattester, we do not generate an evidence_buffer, nor do we generate evidence extension.
+-	 */
+-	if (evidence.type[0] == '\0')
+-		RTLS_WARN("No evidence in certificate due to using nullattester\n");
+-	else {
++	/* Get DICE evidence buffer */
++	/* This check is a workaround for the nullattester.
++	 * Note: For nullattester, we do not generate an evidence_buffer. nor do we generate evidence extension.  */
++	if (evidence.type[0] == '\0') {
++		RTLS_WARN(
++			"evidence type is empty, which is normal only when you are using nullattester.\n");
++	} else {
+ 		enclave_attester_err_t d_ret = dice_generate_evidence_buffer_with_tag(
+ 			&evidence, claims_buffer, claims_buffer_size, &cert_info.evidence_buffer,
+ 			&cert_info.evidence_buffer_size);
+@@ -191,8 +197,5 @@ rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *ctx)
+ 	if (cert_info.cert_buf)
+ 		free(cert_info.cert_buf);
+ 
+-	/* Prevent from re-generation of TLS certificate */
+-	ctx->flags |= RATS_TLS_CTX_FLAGS_CERT_CREATED;
+-
+ 	return RATS_TLS_ERR_NONE;
+ }
+diff --git a/src/crypto_wrappers/internal/rtls_crypto_wrapper_load_all.c b/src/crypto_wrappers/internal/rtls_crypto_wrapper_load_all.c
+index 0e805bb..450e958 100644
+--- a/src/crypto_wrappers/internal/rtls_crypto_wrapper_load_all.c
++++ b/src/crypto_wrappers/internal/rtls_crypto_wrapper_load_all.c
+@@ -42,23 +42,21 @@ rats_tls_err_t rtls_crypto_wrapper_load_all(void)
+ 	unsigned int total_loaded = 0;
+ 	rtls_dirent *ptr = NULL;
+ 	while (rtls_readdir(dir, &ptr) != 1) {
+-		const char *d_name = ptr->d_name;
+-
+-		if (!strcmp(d_name, ".") || !strcmp(d_name, ".."))
++		if (!strcmp(ptr->d_name, ".") || !strcmp(ptr->d_name, "..")) {
+ 			continue;
+-
+-		if (strncmp(d_name + strlen(d_name) - strlen(PATTERN_SUFFIX), PATTERN_SUFFIX,
+-			    strlen(PATTERN_SUFFIX)))
++		}
++		if (strncmp(ptr->d_name + strlen(ptr->d_name) - strlen(PATTERN_SUFFIX),
++			    PATTERN_SUFFIX, strlen(PATTERN_SUFFIX))) {
+ 			continue;
+-
++		}
+ #ifdef OCCLUM
+ 		/* Occlum can't identify the d_type of the file, always return DT_UNKNOWN */
+-		if (strncmp(d_name + strlen(d_name) - strlen(PATTERN_SUFFIX), PATTERN_SUFFIX,
+-			    strlen(PATTERN_SUFFIX)) == 0) {
++		if (strncmp(ptr->d_name + strlen(ptr->d_name) - strlen(PATTERN_SUFFIX),
++			    PATTERN_SUFFIX, strlen(PATTERN_SUFFIX)) == 0) {
+ #else
+ 		if (ptr->d_type == DT_REG || ptr->d_type == DT_LNK) {
+ #endif
+-			if (rtls_crypto_wrapper_load_single(d_name) == RATS_TLS_ERR_NONE)
++			if (rtls_crypto_wrapper_load_single(ptr->d_name) == RATS_TLS_ERR_NONE)
+ 				++total_loaded;
+ 		}
+ 	}
+diff --git a/src/include/internal/attester.h b/src/include/internal/attester.h
+index 78ee0c6..8be2a6e 100644
+--- a/src/include/internal/attester.h
++++ b/src/include/internal/attester.h
+@@ -10,7 +10,9 @@
+ #include <rats-tls/attester.h>
+ #include "internal/core.h"
+ 
++#ifndef ENCLAVE_ATTESTERS_DIR
+ #define ENCLAVE_ATTESTERS_DIR "/usr/local/lib/rats-tls/attesters/"
++#endif
+ 
+ extern rats_tls_err_t rtls_enclave_attester_load_all(void);
+ extern rats_tls_err_t rtls_enclave_attester_load_single(const char *);
+diff --git a/src/include/internal/core.h b/src/include/internal/core.h
+index 0edb573..4697968 100644
+--- a/src/include/internal/core.h
++++ b/src/include/internal/core.h
+@@ -41,6 +41,8 @@ extern rats_tls_err_t rtls_core_generate_certificate(rtls_core_context_t *);
+ 
+ extern void rtls_exit(void);
+ 
++extern rats_tls_log_level_t rtls_loglevel_getenv(const char *name);
++
+ extern rats_tls_err_t rtls_instance_init(const char *type, const char *realpath, void **handle);
+ 
+ extern ssize_t rtls_write(int fd, const void *buf, size_t count);
+diff --git a/src/include/internal/cpu.h b/src/include/internal/cpu.h
+index 8bfebc2..0a21fc9 100644
+--- a/src/include/internal/cpu.h
++++ b/src/include/internal/cpu.h
+@@ -28,5 +28,6 @@ extern bool is_tdguest_supported(void);
+ extern bool is_snpguest_supported(void);
+ extern bool is_sevguest_supported(void);
+ extern bool is_csvguest_supported(void);
++extern bool is_virtccaguest_supported(void);
+ 
+ #endif /* _INTERNAL_CPU_H */
+diff --git a/src/include/internal/crypto_wrapper.h b/src/include/internal/crypto_wrapper.h
+index c155f4a..3f17d9b 100644
+--- a/src/include/internal/crypto_wrapper.h
++++ b/src/include/internal/crypto_wrapper.h
+@@ -10,7 +10,9 @@
+ #include <rats-tls/crypto_wrapper.h>
+ #include "internal/core.h"
+ 
++#ifndef CRYPTO_WRAPPERS_DIR
+ #define CRYPTO_WRAPPERS_DIR "/usr/local/lib/rats-tls/crypto-wrappers/"
++#endif
+ 
+ extern rats_tls_err_t rtls_crypto_wrapper_load_all(void);
+ extern rats_tls_err_t rtls_crypto_wrapper_load_single(const char *);
+diff --git a/src/include/internal/dice.h b/src/include/internal/dice.h
+index ef1c220..6559b71 100644
+--- a/src/include/internal/dice.h
++++ b/src/include/internal/dice.h
+@@ -11,6 +11,7 @@
+ #include <rats-tls/endorsement.h>
+ #include <rats-tls/claim.h>
+ #include <rats-tls/hash.h>
++#include <rats-tls/nonce.h>
+ 
+ /* Intel TEE quote, including all SGX (both EPID and ECDSA) and TDX (ECDSA) quote types */
+ #define OCBR_TAG_EVIDENCE_INTEL_TEE_QUOTE 60000
+@@ -18,6 +19,7 @@
+ #define OCBR_TAG_EVIDENCE_INTEL_TEE_REPORT 60001
+ /* SGX report (legacy, generated by EREPORT) */
+ #define OCBR_TAG_EVIDENCE_INTEL_SGX_LEGACY_REPORT 60002
++#define OCBR_TAG_EVIDENCE_VIRTCCA		  0x0f0629
+ #define OCBR_TAG_EVIDENCE_SEV_SNP		  0x1a7504
+ #define OCBR_TAG_EVIDENCE_SEV			  0x1a7505
+ #define OCBR_TAG_EVIDENCE_CSV			  0x1a7506
+@@ -39,6 +41,7 @@ int evidence_from_raw(const uint8_t *data, size_t size, uint64_t tag,
+ 
+ enclave_attester_err_t
+ dice_generate_claims_buffer(hash_algo_t pubkey_hash_algo, const uint8_t *pubkey_hash,
++				const unsigned char *nonce, size_t nonce_size, 
+ 			    const claim_t *custom_claims, size_t custom_claims_length,
+ 			    uint8_t **claims_buffer_out, size_t *claims_buffer_size_out);
+ 
+@@ -65,6 +68,7 @@ dice_parse_endorsements_buffer_with_tag(const char *type, const uint8_t *endorse
+ enclave_verifier_err_t
+ dice_parse_claims_buffer(const uint8_t *claims_buffer, size_t claims_buffer_size,
+ 			 hash_algo_t *pubkey_hash_algo_out, uint8_t *pubkey_hash_out,
++			 uint8_t *nonce_out, size_t *nonce_size_out,
+ 			 claim_t **custom_claims_out, size_t *custom_claims_length_out);
+ 
+ #endif
+diff --git a/src/include/internal/tls_wrapper.h b/src/include/internal/tls_wrapper.h
+index b5e2f94..3758cfd 100644
+--- a/src/include/internal/tls_wrapper.h
++++ b/src/include/internal/tls_wrapper.h
+@@ -10,7 +10,9 @@
+ #include <rats-tls/tls_wrapper.h>
+ #include "internal/core.h"
+ 
++#ifndef TLS_WRAPPERS_DIR
+ #define TLS_WRAPPERS_DIR "/usr/local/lib/rats-tls/tls-wrappers/"
++#endif
+ 
+ extern rats_tls_err_t rtls_tls_wrapper_load_all(void);
+ extern rats_tls_err_t rtls_tls_wrapper_load_single(const char *);
+diff --git a/src/include/internal/verifier.h b/src/include/internal/verifier.h
+index 659e689..a2f99f7 100644
+--- a/src/include/internal/verifier.h
++++ b/src/include/internal/verifier.h
+@@ -10,7 +10,9 @@
+ #include <rats-tls/verifier.h>
+ #include "internal/core.h"
+ 
++#ifndef ENCLAVE_VERIFIERS_DIR
+ #define ENCLAVE_VERIFIERS_DIR "/usr/local/lib/rats-tls/verifiers/"
++#endif
+ 
+ extern rats_tls_err_t rtls_enclave_verifier_load_all(void);
+ extern rats_tls_err_t rtls_enclave_verifier_load_single(const char *);
+diff --git a/src/include/rats-tls/api.h b/src/include/rats-tls/api.h
+index 557872a..8fbb0e2 100644
+--- a/src/include/rats-tls/api.h
++++ b/src/include/rats-tls/api.h
+@@ -100,6 +100,11 @@ typedef struct rtls_csv_evidence {
+ 	uint32_t policy_sz;
+ } rtls_csv_evidence_t;
+ 
++typedef struct rtls_cca_evidence {
++	uint8_t *evidence;
++	uint32_t evidence_sz;
++} rtls_cca_evidence_t;
++
+ /* The public_key, user_data_size and user_data are needed to include in hash. */
+ typedef struct ehd {
+ 	void *public_key;
+@@ -109,7 +114,7 @@ typedef struct ehd {
+ 	char *unhashed;
+ } ehd_t;
+ 
+-typedef enum { SGX_ECDSA = 1, TDX_ECDSA, CSV } enclave_evidence_type_t;
++typedef enum { SGX_ECDSA = 1, TDX_ECDSA, CSV, CCA } enclave_evidence_type_t;
+ 
+ typedef struct rtls_evidence {
+ 	enclave_evidence_type_t type;
+@@ -122,6 +127,7 @@ typedef struct rtls_evidence {
+ 		rtls_sgx_evidence_t sgx;
+ 		rtls_tdx_evidence_t tdx;
+ 		rtls_csv_evidence_t csv;
++		rtls_cca_evidence_t cca;
+ 	};
+ } rtls_evidence_t;
+ 
+diff --git a/src/include/rats-tls/attester.h b/src/include/rats-tls/attester.h
+index e73472a..1bd96c7 100644
+--- a/src/include/rats-tls/attester.h
++++ b/src/include/rats-tls/attester.h
+@@ -20,11 +20,13 @@
+ #define ENCLAVE_ATTESTER_API_VERSION_MAX     ENCLAVE_ATTESTER_API_VERSION_1
+ #define ENCLAVE_ATTESTER_API_VERSION_DEFAULT ENCLAVE_ATTESTER_API_VERSION_1
+ 
+-#define ENCLAVE_ATTESTER_OPTS_FLAGS_SGX_ENCLAVE (1 << 0)
+-#define ENCLAVE_ATTESTER_OPTS_FLAGS_TDX_GUEST	(ENCLAVE_ATTESTER_OPTS_FLAGS_SGX_ENCLAVE << 1)
+-#define ENCLAVE_ATTESTER_OPTS_FLAGS_SEV_GUEST	(ENCLAVE_ATTESTER_OPTS_FLAGS_TDX_GUEST << 1)
+-#define ENCLAVE_ATTESTER_OPTS_FLAGS_SNP_GUEST	(ENCLAVE_ATTESTER_OPTS_FLAGS_SEV_GUEST << 1)
+-#define ENCLAVE_ATTESTER_OPTS_FLAGS_CSV_GUEST	(ENCLAVE_ATTESTER_OPTS_FLAGS_SNP_GUEST << 1)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_SGX_ENCLAVE 	(1 << 0)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_TDX_GUEST		(ENCLAVE_ATTESTER_OPTS_FLAGS_SGX_ENCLAVE << 1)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_SEV_GUEST		(ENCLAVE_ATTESTER_OPTS_FLAGS_TDX_GUEST << 1)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_SNP_GUEST		(ENCLAVE_ATTESTER_OPTS_FLAGS_SEV_GUEST << 1)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_CSV_GUEST		(ENCLAVE_ATTESTER_OPTS_FLAGS_SNP_GUEST << 1)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_VIRTCCA_GUEST	(ENCLAVE_ATTESTER_OPTS_FLAGS_CSV_GUEST << 1)
++#define ENCLAVE_ATTESTER_OPTS_FLAGS_VIRTCCA_FAKE	(ENCLAVE_ATTESTER_OPTS_FLAGS_VIRTCCA_GUEST << 1)
+ 
+ #define ENCLAVE_ATTESTER_FLAGS_DEFAULT 0
+ 
+@@ -78,6 +80,12 @@ struct enclave_attester_ctx {
+ 			const char name[ENCLAVE_ATTESTER_TYPE_NAME_SIZE];
+ 			uint8_t cert_type;
+ 		} tdx;
++
++		struct {
++			const char name[ENCLAVE_ATTESTER_TYPE_NAME_SIZE];
++			// Fixme: Add here
++		} virtcca;
++		
+ 	} config;
+ };
+ 
+diff --git a/src/include/rats-tls/cert.h b/src/include/rats-tls/cert.h
+index 2706696..d59b478 100644
+--- a/src/include/rats-tls/cert.h
++++ b/src/include/rats-tls/cert.h
+@@ -7,6 +7,8 @@
+ #ifndef _ENCLAVE_CERT_H
+ #define _ENCLAVE_CERT_H
+ 
++#define REPORT_MAX_LENGTH 8192
++
+ typedef struct {
+ 	const unsigned char *organization;
+ 	const unsigned char *organization_unit;
+@@ -54,6 +56,11 @@ typedef struct {
+ 	uint32_t report_len;
+ } csv_attestation_evidence_t;
+ 
++typedef struct {
++	uint8_t report[REPORT_MAX_LENGTH];  // 8bytes report_len + report + 8bytes device_cert_len + device_cert
++	uint32_t report_len;
++} virtcca_attestation_evidence_t;
++
+ typedef struct {
+ 	char type[ENCLAVE_ATTESTER_TYPE_NAME_SIZE];
+ 	union {
+@@ -64,6 +71,7 @@ typedef struct {
+ 		snp_attestation_evidence_t snp;
+ 		sev_attestation_evidence_t sev;
+ 		csv_attestation_evidence_t csv;
++		virtcca_attestation_evidence_t virtcca;
+ 	};
+ } attestation_evidence_t;
+ 
+diff --git a/src/include/rats-tls/err.h b/src/include/rats-tls/err.h
+index 359e8eb..c01c8ed 100644
+--- a/src/include/rats-tls/err.h
++++ b/src/include/rats-tls/err.h
+@@ -116,6 +116,7 @@ typedef enum {
+ 	TLS_WRAPPER_ERR_UNSUPPORTED_QUOTE,
+ 	TLS_WRAPPER_ERR_PRIV_KEY,
+ 	TLS_WRAPPER_ERR_CERT,
++	TLS_WRAPPER_ERR_NONCE,
+ 	TLS_WRAPPER_ERR_UNKNOWN,
+ } tls_wrapper_err_t;
+ 
+diff --git a/src/include/rats-tls/log.h b/src/include/rats-tls/log.h
+index 9edb201..6895b50 100644
+--- a/src/include/rats-tls/log.h
++++ b/src/include/rats-tls/log.h
+@@ -61,6 +61,14 @@ extern rats_tls_log_level_t global_log_level;
+ 			printf("[" #level "] %s()@L%d: " fmt, __FUNCTION__, __LINE__, \
+ 			       ##__VA_ARGS__);                                        \
+ 	} while (0)
++#elif defined VIRTCCA
++  #define __PR__(level, io, fmt, ...)                                                   \
++	do {                                                                          \
++		if (global_log_level <= RATS_TLS_LOG_LEVEL_##level)               \
++			printf("[" #level "] %s()@L%d: " fmt, __FUNCTION__, __LINE__, \
++			       ##__VA_ARGS__);                                        \
++			fflush(io); 												  \
++	} while (0)
+ #else
+   #define __PR__(level, io, fmt, ...)                                                   \
+ 	do {                                                                            \
+diff --git a/src/include/rats-tls/nonce.h b/src/include/rats-tls/nonce.h
+new file mode 100644
+index 0000000..82c2999
+--- /dev/null
++++ b/src/include/rats-tls/nonce.h
+@@ -0,0 +1,6 @@
++#ifndef _RATS_TLS_NONCE_H
++#define _RATS_TLS_NONCE_H
++
++#define MAX_NONCE_SIZE 64
++
++#endif /* _RATS_TLS_NONCE_H */
+\ No newline at end of file
+diff --git a/src/include/rats-tls/tls_wrapper.h b/src/include/rats-tls/tls_wrapper.h
+index 32ad442..5e7d42d 100644
+--- a/src/include/rats-tls/tls_wrapper.h
++++ b/src/include/rats-tls/tls_wrapper.h
+@@ -36,6 +36,7 @@ typedef struct {
+ 	tls_wrapper_err_t (*use_privkey)(tls_wrapper_ctx_t *ctx, rats_tls_cert_algo_t algo,
+ 					 void *privkey_buf, size_t privkey_len);
+ 	tls_wrapper_err_t (*use_cert)(tls_wrapper_ctx_t *ctx, rats_tls_cert_info_t *cert_info);
++	tls_wrapper_err_t (*get_nonce)(tls_wrapper_ctx_t *ctx, bool peer, void *buf, size_t *buf_size);
+ 	tls_wrapper_err_t (*negotiate)(tls_wrapper_ctx_t *ctx, int fd);
+ 	tls_wrapper_err_t (*transmit)(tls_wrapper_ctx_t *ctx, void *buf, size_t *buf_size);
+ 	tls_wrapper_err_t (*receive)(tls_wrapper_ctx_t *ctx, void *buf, size_t *buf_size);
+@@ -57,7 +58,8 @@ extern tls_wrapper_err_t tls_wrapper_register(const tls_wrapper_opts_t *);
+ 
+ extern tls_wrapper_err_t
+ tls_wrapper_verify_certificate_extension(tls_wrapper_ctx_t *tls_ctx, const uint8_t *pubkey_buffer,
+-					 size_t pubkey_buffer_size, uint8_t *evidence_buffer,
++					 size_t pubkey_buffer_size, const uint8_t *nonce_buffer,
++					 size_t nonce_buffer_size, uint8_t *evidence_buffer,
+ 					 size_t evidence_buffer_size, uint8_t *endorsements_buffer,
+ 					 size_t endorsements_buffer_size);
+ 
+diff --git a/src/include/rats-tls/verifier.h b/src/include/rats-tls/verifier.h
+index be891e9..4041841 100644
+--- a/src/include/rats-tls/verifier.h
++++ b/src/include/rats-tls/verifier.h
+@@ -23,10 +23,11 @@
+ #define ENCLAVE_VERIFIER_OPTS_FLAGS_DEFAULT	 0
+ #define ENCLAVE_VERIFIER_OPTS_FLAGS_SGX1_ENCLAVE (1 << 0)
+ #define ENCLAVE_VERIFIER_OPTS_FLAGS_SGX2_ENCLAVE (1 << 1)
+-#define ENCLAVE_VERIFIER_OPTS_FLAGS_TDX		 (1 << 2)
+-#define ENCLAVE_VERIFIER_OPTS_FLAGS_SNP		 (1 << 3)
+-#define ENCLAVE_VERIFIER_OPTS_FLAGS_SEV		 (1 << 4)
+-#define ENCLAVE_VERIFIER_OPTS_FLAGS_CSV		 (1 << 5)
++#define ENCLAVE_VERIFIER_OPTS_FLAGS_TDX		 	 (1 << 2)
++#define ENCLAVE_VERIFIER_OPTS_FLAGS_SNP		 	 (1 << 3)
++#define ENCLAVE_VERIFIER_OPTS_FLAGS_SEV		 	 (1 << 4)
++#define ENCLAVE_VERIFIER_OPTS_FLAGS_CSV		 	 (1 << 5)
++#define ENCLAVE_VERIFIER_OPTS_FLAGS_VIRTCCA		 (1 << 6)
+ 
+ typedef struct enclave_verifier_ctx enclave_verifier_ctx_t;
+ 
+@@ -72,6 +73,11 @@ struct enclave_verifier_ctx {
+ 			const char name[ENCLAVE_VERIFIER_TYPE_NAME_SIZE];
+ 			uint8_t cert_type;
+ 		} tdx;
++
++		struct {
++			const char name[ENCLAVE_VERIFIER_TYPE_NAME_SIZE];
++			// FixMe: add here
++		} virtcca;
+ 	} config;
+ };
+ 
+diff --git a/src/include/rats-tls/virtcca.h b/src/include/rats-tls/virtcca.h
+new file mode 100644
+index 0000000..051c141
+--- /dev/null
++++ b/src/include/rats-tls/virtcca.h
+@@ -0,0 +1,97 @@
++#ifndef _TOKEN_H
++#define _TOKEN_H
++
++#include "qcbor/qcbor.h"
++#include "qcbor/qcbor_spiffy_decode.h"
++
++#define ATTEST_MAX_TOKEN_SIZE 4096
++
++#define TAG_CCA_TOKEN                       (399)
++#define CCA_PLAT_TOKEN                      (44234)
++#define CCA_CVM_TOKEN                       (44241)
++
++#define CCA_CVM_CHALLENGE                   (10)
++#define CCA_CVM_PERSONALIZATION_VALUE       (44235)
++#define CCA_CVM_HASH_ALGO_ID                (44236)
++#define CCA_CVM_PUB_KEY                     (44237)
++#define CCA_CVM_INITIAL_MEASUREMENT         (44238)
++#define CCA_CVM_EXTENSIBLE_MEASUREMENTS     (44239)
++#define CCA_CVM_EXTED_MEAS_SLOTS_NUM        (4)
++#define CCA_CVM_PUB_KEY_HASH_ALGO_ID        (44240)
++
++#define CCA_BYTE_SIZE_32    (32)
++#define CCA_BYTE_SIZE_48    (48)
++#define CCA_BYTE_SIZE_64    (64)
++
++#define CCA_BYTE_SIZE_33    (33)
++#define CCA_BYTE_SIZE_97    (97)
++
++#define CCA_BYTE_SIZE_550   (550)
++
++#define VIRTCCA_SUCCESS     (0)
++#define VIRTCCA_ERROR       (1)
++
++#define CCA_CVM_CLAIM_CNT   (7)
++
++typedef struct q_useful_buf_c qbuf_t;
++
++/*
++ * DEN0137 Realm Management Monitor Specification (1.0-eac5)
++ *
++ * CCA attestation token {                     // Tag: 399 (cca-token-collection)
++ *     CVM token {                             // 44241
++ *         COSE_Sign1 envelop {                // 18 (COSE_Sign1)
++ *             Protected headers
++ *             Unprotected headers
++ *             CVM token claim map {           // Payload
++ *                 challenge                   // 10
++ *                 rpv                         // 44235
++ *                 rim                         // 44238
++ *                 rem[4]                      // 44239
++ *                 cvm_hash_algo_id            // 44236
++ *                 pub_key                     // 44237
++ *                 pub_key_hash_algo_id        // 44240
++ *             }
++ *             Signature(RAK)
++ *         }
++ *     }
++ * }
++*/
++
++typedef struct {
++    qbuf_t component_type; /* t */
++    qbuf_t measurement; /* b */
++    qbuf_t version; /* t */
++    qbuf_t signer_id; /* b */
++    qbuf_t hash_algo_id; /* t */
++} sw_comp_claims_t;
++
++typedef struct {
++    qbuf_t challenge;                   /* 10 */
++    qbuf_t rpv;                         /* 44235 */
++    qbuf_t rim;                         /* 44238 */
++    qbuf_t rem[4];                      /* 44239 */
++    qbuf_t hash_algo_id;                /* 44236 */
++    qbuf_t pub_key;                     /* 44237 */
++    qbuf_t pub_key_hash_algo_id;        /* 44240 */
++} cvm_claims_t;
++
++typedef struct {
++    qbuf_t p_headers;
++    qbuf_t np_headers;
++    qbuf_t payload;
++    qbuf_t signature;
++} cose_sign1_envelop_t;
++
++typedef struct {
++    cose_sign1_envelop_t cvm_envelop;
++    qbuf_t               cvm_cose;
++    cvm_claims_t         cvm_token;
++} cca_token_t;
++
++uint64_t parse_cca_attestation_token(cca_token_t *token,
++                                     uint8_t *raw_token, size_t raw_token_size);
++void print_cca_attestation_token(const cca_token_t *token);
++void print_cca_attestation_token_raw(const cca_token_t *token);
++
++#endif /* _TOKEN_H */
+\ No newline at end of file
+diff --git a/src/tls_wrappers/api/tls_wrapper_verify_certificate_extension.c b/src/tls_wrappers/api/tls_wrapper_verify_certificate_extension.c
+index e1a70e6..50c61e3 100644
+--- a/src/tls_wrappers/api/tls_wrapper_verify_certificate_extension.c
++++ b/src/tls_wrappers/api/tls_wrapper_verify_certificate_extension.c
+@@ -14,11 +14,13 @@
+ #include "internal/dice.h"
+ 
+ #include <rats-tls/csv.h>
++#include <rats-tls/virtcca.h>
+ // clang-format off
+ #ifdef SGX
+ #include "sgx_report.h"
+ #endif
+-#include "sgx_quote_3.h"
++// FixMe: "sgx_quote_3.h"
++// #include "sgx_quote_3.h"
+ // clang-format on
+ 
+ tls_wrapper_err_t
+@@ -34,26 +36,17 @@ tls_wrapper_verify_evidence(tls_wrapper_ctx_t *tls_ctx, attestation_evidence_t *
+ 	    !tls_ctx->rtls_handle->verifier->opts->verify_evidence)
+ 		return -TLS_WRAPPER_ERR_INVALID;
+ 
+-	if (!(tls_ctx->rtls_handle->flags & RATS_TLS_CONF_FLAGS_VERIFIER_ENFORCED)) {
+-		char *type;
+-
+-		if (evidence->type[0])
+-			type = evidence->type;
+-		else
+-			type = "nullverifier";
+-
+-		if (strcmp(tls_ctx->rtls_handle->verifier->opts->type, type)) {
+-			RTLS_DEBUG("Requesting verifier '%s' against current verifier '%s'\n", type,
+-				   tls_ctx->rtls_handle->verifier->opts->name);
+-
+-			rats_tls_err_t tlserr = rtls_verifier_select(
+-				tls_ctx->rtls_handle, type, tls_ctx->rtls_handle->config.cert_algo);
+-			if (tlserr != RATS_TLS_ERR_NONE) {
+-				RTLS_ERR(
+-					"the verifier selecting err %#x during verifying cert extension\n",
+-					tlserr);
+-				return -TLS_WRAPPER_ERR_INVALID;
+-			}
++	if (strcmp(tls_ctx->rtls_handle->verifier->opts->type, evidence->type) &&
++	    !(tls_ctx->rtls_handle->flags & RATS_TLS_CONF_FLAGS_VERIFIER_ENFORCED)) {
++		RTLS_WARN("type doesn't match between verifier '%s' and evidence '%s'\n",
++			  tls_ctx->rtls_handle->verifier->opts->name, evidence->type);
++		rats_tls_err_t tlserr =
++			rtls_verifier_select(tls_ctx->rtls_handle, evidence->type,
++					     tls_ctx->rtls_handle->config.cert_algo);
++		if (tlserr != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("the verifier selecting err %#x during verifying cert extension\n",
++				 tlserr);
++			return -TLS_WRAPPER_ERR_INVALID;
+ 		}
+ 	}
+ 
+@@ -70,7 +63,10 @@ tls_wrapper_verify_evidence(tls_wrapper_ctx_t *tls_ctx, attestation_evidence_t *
+ tls_wrapper_err_t tls_wrapper_verify_certificate_extension(
+ 	tls_wrapper_ctx_t *tls_ctx,
+ 	const uint8_t *pubkey_buffer /* in SubjectPublicKeyInfo format */,
+-	size_t pubkey_buffer_size, uint8_t *evidence_buffer /* optional, for nullverifier */,
++	size_t pubkey_buffer_size, 
++	const uint8_t *nonce_buffer,
++	size_t nonce_buffer_size,
++	uint8_t *evidence_buffer /* optional, for nullverifier */,
+ 	size_t evidence_buffer_size, uint8_t *endorsements_buffer /* optional */,
+ 	size_t endorsements_buffer_size)
+ {
+@@ -84,19 +80,20 @@ tls_wrapper_err_t tls_wrapper_verify_certificate_extension(
+ 	size_t custom_claims_length = 0;
+ 
+ 	RTLS_DEBUG(
+-		"tls_ctx: %p, pubkey_buffer: %p, pubkey_buffer_size: %zu, evidence_buffer: %p, evidence_buffer_size: %zu, endorsements_buffer: %p, endorsements_buffer_size: %zu\n",
+-		tls_ctx, pubkey_buffer, pubkey_buffer_size, evidence_buffer, evidence_buffer_size,
++		"tls_ctx: %p, pubkey_buffer: %p, pubkey_buffer_size: %zu, nonce_buffer: %p, nonce_buffer_size: %zu, "
++		"evidence_buffer: %p, evidence_buffer_size: %zu, endorsements_buffer: %p, endorsements_buffer_size: %zu\n",
++		tls_ctx, pubkey_buffer, pubkey_buffer_size, nonce_buffer, nonce_buffer_size, evidence_buffer, evidence_buffer_size,
+ 		endorsements_buffer, endorsements_buffer_size);
+ 
+ 	if (!tls_ctx || !tls_ctx->rtls_handle || !tls_ctx->rtls_handle->verifier ||
+ 	    !tls_ctx->rtls_handle->verifier->opts ||
+-	    !tls_ctx->rtls_handle->verifier->opts->verify_evidence || !pubkey_buffer)
++	    !tls_ctx->rtls_handle->verifier->opts->verify_evidence || !pubkey_buffer || !nonce_buffer)
+ 		return -TLS_WRAPPER_ERR_INVALID;
+ 
+ 	/* Get evidence struct and claims_buffer from evidence_buffer. */
+ 	if (!evidence_buffer) {
+ 		/* evidence_buffer is empty, which means that the other party is using a non-dice certificate or is using a nullattester */
+-		RTLS_WARN("No evidence available in peer's certificate\n");
++		RTLS_WARN("there is no evidence buffer in peer's certificate.\n");
+ 		memset(&evidence, 0, sizeof(attestation_evidence_t));
+ 	} else {
+ 		enclave_verifier_err_t d_ret = dice_parse_evidence_buffer_with_tag(
+@@ -179,9 +176,11 @@ tls_wrapper_err_t tls_wrapper_verify_certificate_extension(
+ 	if (claims_buffer) {
+ 		hash_algo_t pubkey_hash_algo = HASH_ALGO_RESERVED;
+ 		uint8_t pubkey_hash[MAX_HASH_SIZE];
++		uint8_t nonce[MAX_NONCE_SIZE];
++		size_t nonce_size = 0;
+ 		enclave_verifier_err_t d_ret = dice_parse_claims_buffer(
+ 			claims_buffer, claims_buffer_size, &pubkey_hash_algo, pubkey_hash,
+-			&custom_claims, &custom_claims_length);
++			nonce, &nonce_size, &custom_claims, &custom_claims_length);
+ 		free(claims_buffer);
+ 		claims_buffer = NULL;
+ 		if (d_ret != ENCLAVE_VERIFIER_ERR_NONE) {
+@@ -229,6 +228,25 @@ tls_wrapper_err_t tls_wrapper_verify_certificate_extension(
+ 			ret = TLS_WRAPPER_ERR_INVALID;
+ 			goto err;
+ 		}
++
++		/* Verify nonce */
++		RTLS_DEBUG("check nonce. nonce_buffer_size: %zu, nonce size: %zu\n", nonce_buffer_size, nonce_size);
++		RTLS_DEBUG("The nonce in claim [%zu] %02x%02x%02x%02x%02x%02x%02x%02x...\n",
++			   nonce_size, nonce[0], nonce[1], nonce[2], nonce[3],
++			   nonce[4], nonce[5], nonce[6], nonce[7]);
++
++		if (nonce_buffer_size != nonce_size) {
++			RTLS_ERR("unmatched nonce lenth in claims buffer\n");
++			ret = TLS_WRAPPER_ERR_INVALID;
++			goto err;
++		}
++		
++		if (memcmp(nonce_buffer, nonce, nonce_buffer_size)) {
++			RTLS_ERR("unmatched nonce value in claims buffer\n");
++			ret = TLS_WRAPPER_ERR_INVALID;
++			goto err;
++		} 
++
+ 	}
+ 
+ 	/* Verify evidence struct via user_callback */
+@@ -237,16 +255,17 @@ tls_wrapper_err_t tls_wrapper_verify_certificate_extension(
+ 	ev.custom_claims = custom_claims;
+ 	ev.custom_claims_length = custom_claims_length;
+ 	if (!strncmp(evidence.type, "sgx_ecdsa", sizeof(evidence.type))) {
+-		sgx_quote3_t *quote3 = (sgx_quote3_t *)evidence.ecdsa.quote;
+-
+-		ev.sgx.mr_enclave = (uint8_t *)quote3->report_body.mr_enclave.m;
+-		ev.sgx.mr_signer = quote3->report_body.mr_signer.m;
+-		ev.sgx.product_id = quote3->report_body.isv_prod_id;
+-		ev.sgx.security_version = quote3->report_body.isv_svn;
+-		ev.sgx.attributes = (uint8_t *)&(quote3->report_body.attributes);
+-		ev.type = SGX_ECDSA;
+-		ev.quote = (char *)quote3;
+-		ev.quote_size = sizeof(sgx_quote3_t);
++		// FixMe: "sgx_quote_3.h"
++		// sgx_quote3_t *quote3 = (sgx_quote3_t *)evidence.ecdsa.quote;
++
++		// ev.sgx.mr_enclave = (uint8_t *)quote3->report_body.mr_enclave.m;
++		// ev.sgx.mr_signer = quote3->report_body.mr_signer.m;
++		// ev.sgx.product_id = quote3->report_body.isv_prod_id;
++		// ev.sgx.security_version = quote3->report_body.isv_svn;
++		// ev.sgx.attributes = (uint8_t *)&(quote3->report_body.attributes);
++		// ev.type = SGX_ECDSA;
++		// ev.quote = (char *)quote3;
++		// ev.quote_size = sizeof(sgx_quote3_t);
+ 	}
+ #if 0
+ 	else if (!strncmp(evidence.type, "tdx_ecdsa", sizeof(evidence.type))) {
+@@ -284,6 +303,12 @@ tls_wrapper_err_t tls_wrapper_verify_certificate_extension(
+ 		ev.quote_size = sizeof(*report);
+ 	}
+ 
++	else if (!strncmp(evidence.type, "virtcca", sizeof(evidence.type))) {
++		ev.cca.evidence = (uint8_t *)tls_ctx->rtls_handle->verifier->verifier_private;
++		ev.cca.evidence_sz = 4104;
++		ev.type = CCA;
++	}
++
+ 	if (tls_ctx->rtls_handle->user_callback) {
+ 		int rc = tls_ctx->rtls_handle->user_callback(&ev);
+ 		if (!rc) {
+diff --git a/src/tls_wrappers/nulltls/negotiate.c b/src/tls_wrappers/nulltls/negotiate.c
+index 028d78e..b9b6a66 100644
+--- a/src/tls_wrappers/nulltls/negotiate.c
++++ b/src/tls_wrappers/nulltls/negotiate.c
+@@ -22,8 +22,10 @@ tls_wrapper_err_t nulltls_negotiate(tls_wrapper_ctx_t *ctx, int fd)
+ 
+ 		size_t pubkey_buffer_size = 0;
+ 		uint8_t pubkey_buffer[pubkey_buffer_size];
++		size_t nonce_buffer_size = 0;
++		uint8_t nonce_buffer[nonce_buffer_size];
+ 		tls_wrapper_err_t err = tls_wrapper_verify_certificate_extension(
+-			ctx, pubkey_buffer, pubkey_buffer_size, NULL, 0, NULL, 0);
++			ctx, pubkey_buffer, pubkey_buffer_size, nonce_buffer, nonce_buffer_size, NULL, 0, NULL, 0);
+ 		if (err != TLS_WRAPPER_ERR_NONE) {
+ 			RTLS_ERR("ERROR: failed to verify certificate extension\n");
+ 			return err;
+diff --git a/src/tls_wrappers/nulltls/receive.c b/src/tls_wrappers/nulltls/receive.c
+index fd0ea12..86ee259 100644
+--- a/src/tls_wrappers/nulltls/receive.c
++++ b/src/tls_wrappers/nulltls/receive.c
+@@ -6,8 +6,8 @@
+ 
+ #include <unistd.h>
+ #include <rats-tls/log.h>
++#include <internal/core.h>
+ #include <rats-tls/tls_wrapper.h>
+-#include "internal/core.h"
+ 
+ tls_wrapper_err_t nulltls_receive(tls_wrapper_ctx_t *ctx, void *buf, size_t *buf_size)
+ {
+diff --git a/src/tls_wrappers/nulltls/transmit.c b/src/tls_wrappers/nulltls/transmit.c
+index e450679..08f16e0 100644
+--- a/src/tls_wrappers/nulltls/transmit.c
++++ b/src/tls_wrappers/nulltls/transmit.c
+@@ -7,7 +7,7 @@
+ #include <unistd.h>
+ #include <rats-tls/log.h>
+ #include <rats-tls/tls_wrapper.h>
+-#include "internal/core.h"
++#include <internal/core.h>
+ 
+ tls_wrapper_err_t nulltls_transmit(tls_wrapper_ctx_t *ctx, void *buf, size_t *buf_size)
+ {
+diff --git a/src/tls_wrappers/openssl/CMakeLists.txt b/src/tls_wrappers/openssl/CMakeLists.txt
+index 2bc8da8..bb7900d 100644
+--- a/src/tls_wrappers/openssl/CMakeLists.txt
++++ b/src/tls_wrappers/openssl/CMakeLists.txt
+@@ -27,6 +27,7 @@ set(SOURCES cleanup.c
+             receive.c
+             transmit.c
+             use_cert.c
++            get_nonce.c
+             use_privkey.c
+             x509_openssl10x.c
+             )
+diff --git a/src/tls_wrappers/openssl/get_nonce.c b/src/tls_wrappers/openssl/get_nonce.c
+new file mode 100644
+index 0000000..ed7de05
+--- /dev/null
++++ b/src/tls_wrappers/openssl/get_nonce.c
+@@ -0,0 +1,49 @@
++#include <rats-tls/log.h>
++#include <rats-tls/tls_wrapper.h>
++#include "openssl.h"
++#include <string.h>
++
++tls_wrapper_err_t openssl_tls_get_nonce(tls_wrapper_ctx_t *ctx, bool peer, void *buf, size_t *buf_size)
++{
++    RTLS_DEBUG("ctx: %p, peer: %d, buf: %p, buf_size: %zu\n", ctx, peer, buf, *buf_size);
++    size_t len;
++
++	if (!ctx || !buf || !buf_size)
++		return -TLS_WRAPPER_ERR_INVALID;
++
++    unsigned char *buffer = (unsigned char *)buf;
++	openssl_ctx_t *ssl_ctx = (openssl_ctx_t *)ctx->tls_private;
++	if (ssl_ctx == NULL || ssl_ctx->ssl == NULL) {
++        RTLS_ERR("no ssl_ctx or ssl available\n");
++        return -TLS_WRAPPER_ERR_NONCE; 
++    }
++	
++    /* Read self or peer random number
++       SERVER && peer=True  : client
++       CLIENT && peer=False : client
++       SERVER && peer=False : server
++       CLIENT && peer=True  : server
++    */
++    unsigned long conf_flags = ctx->conf_flags;
++    if (((conf_flags & RATS_TLS_CONF_FLAGS_SERVER) && peer) ||
++        (!(conf_flags & RATS_TLS_CONF_FLAGS_SERVER) && !peer)) {
++        len = SSL_get_client_random(ssl_ctx->ssl, buffer, *buf_size);
++    } else {
++        len = SSL_get_server_random(ssl_ctx->ssl, buffer, *buf_size);
++    }
++
++    /* len can only be smaller or equal to buf_size */
++    *buf_size = len;
++
++    if (len > 0) {
++		RTLS_DEBUG(
++			"%s random number in hello [%zu] %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x...\n",
++			peer ? "peer" : "self", *buf_size, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5], 
++            buffer[6],	buffer[7], buffer[8], buffer[9], buffer[10], buffer[11], buffer[12], buffer[13], buffer[14], buffer[15]);
++    } else {
++        RTLS_ERR("SSL_get_*_random() failed\n");
++        return TLS_WRAPPER_ERR_NONCE;
++    }
++
++    return TLS_WRAPPER_ERR_NONE;
++}
+\ No newline at end of file
+diff --git a/src/tls_wrappers/openssl/main.c b/src/tls_wrappers/openssl/main.c
+index c1c88fe..b108aa6 100644
+--- a/src/tls_wrappers/openssl/main.c
++++ b/src/tls_wrappers/openssl/main.c
+@@ -15,6 +15,8 @@ extern tls_wrapper_err_t openssl_tls_use_privkey(tls_wrapper_ctx_t *ctx, rats_tl
+ 						 void *privkey_buf, size_t privkey_len);
+ extern tls_wrapper_err_t openssl_tls_use_cert(tls_wrapper_ctx_t *ctx,
+ 					      rats_tls_cert_info_t *cert_info);
++extern tls_wrapper_err_t openssl_tls_get_nonce(tls_wrapper_ctx_t *ctx, bool peer, 
++						  void *buf, size_t *buf_size);
+ extern tls_wrapper_err_t openssl_tls_negotiate(tls_wrapper_ctx_t *, int fd);
+ extern tls_wrapper_err_t openssl_tls_transmit(tls_wrapper_ctx_t *, void *, size_t *);
+ extern tls_wrapper_err_t openssl_tls_receive(tls_wrapper_ctx_t *, void *, size_t *);
+@@ -28,6 +30,7 @@ static tls_wrapper_opts_t openssl_opts = {
+ 	.init = openssl_tls_init,
+ 	.use_privkey = openssl_tls_use_privkey,
+ 	.use_cert = openssl_tls_use_cert,
++	.get_nonce = openssl_tls_get_nonce,
+ 	.negotiate = openssl_tls_negotiate,
+ 	.transmit = openssl_tls_transmit,
+ 	.receive = openssl_tls_receive,
+diff --git a/src/tls_wrappers/openssl/negotiate.c b/src/tls_wrappers/openssl/negotiate.c
+index 8657924..bee95c1 100644
+--- a/src/tls_wrappers/openssl/negotiate.c
++++ b/src/tls_wrappers/openssl/negotiate.c
+@@ -11,6 +11,7 @@
+ #include "openssl.h"
+ 
+ extern int verify_certificate(int preverify_ok, X509_STORE_CTX *store);
++extern int generate_certificate(SSL *ssl, void *ctx);
+ 
+ tls_wrapper_err_t openssl_internal_negotiate(tls_wrapper_ctx_t *ctx, unsigned long conf_flags,
+ 					     int fd, int (*verify)(int, X509_STORE_CTX *))
+@@ -37,9 +38,13 @@ tls_wrapper_err_t openssl_internal_negotiate(tls_wrapper_ctx_t *ctx, unsigned lo
+ 		SSL_CTX_set_verify(ssl_ctx->sctx, mode, verify);
+ 	}
+ 
++	/* Set certificate callback function to dynamically generate certificate */
++	SSL_CTX_set_cert_cb(ssl_ctx->sctx, generate_certificate, (void *) ctx);
++
+ 	SSL *ssl = SSL_new(ssl_ctx->sctx);
+ 	if (!ssl)
+ 		return -TLS_WRAPPER_ERR_NO_MEM;
++	ssl_ctx->ssl = ssl;
+ 
+ 	X509_STORE *cert_store = SSL_CTX_get_cert_store(ssl_ctx->sctx);
+ 	X509_STORE_set_ex_data(cert_store, openssl_ex_data_idx, ctx);
+@@ -67,12 +72,10 @@ tls_wrapper_err_t openssl_internal_negotiate(tls_wrapper_ctx_t *ctx, unsigned lo
+ 				 SSL_get_error(ssl, err));
+ 		// TODO: handle result of SSL_get_error()
+ 		print_openssl_err_all(ssl, err);
+-
++		ssl_ctx->ssl = NULL;
+ 		return OPENSSL_ERR_CODE(err);
+ 	}
+ 
+-	ssl_ctx->ssl = ssl;
+-
+ 	if (conf_flags & RATS_TLS_CONF_FLAGS_SERVER)
+ 		RTLS_DEBUG("success to negotiate\n");
+ 	else
+diff --git a/src/tls_wrappers/openssl/un_negotiate.c b/src/tls_wrappers/openssl/un_negotiate.c
+index 20acd4f..2ef86df 100644
+--- a/src/tls_wrappers/openssl/un_negotiate.c
++++ b/src/tls_wrappers/openssl/un_negotiate.c
+@@ -9,9 +9,11 @@
+ #include <rats-tls/log.h>
+ #include <rats-tls/err.h>
+ #include <rats-tls/tls_wrapper.h>
++#include <internal/core.h>
++#include <internal/dice.h>
+ #include "openssl.h"
+-#include "internal/core.h"
+-#include "internal/dice.h"
++
++extern tls_wrapper_err_t openssl_tls_get_nonce(tls_wrapper_ctx_t *ctx, bool peer, void *buf, size_t *buf_size);
+ 
+ static int rtls_memcpy_s(void *dst, uint32_t dst_size, const void *src, uint32_t num_bytes)
+ {
+@@ -199,6 +201,8 @@ int verify_certificate(int preverify_ok, X509_STORE_CTX *ctx)
+ 		return 0;
+ 	}
+ 
++	tls_wrapper_err_t t_err;
++
+ 	/* Get pubkey in SubjectPublicKeyInfo format from cert */
+ 	EVP_PKEY *pkey = X509_get_pubkey(cert);
+ 	if (!pkey) {
+@@ -211,6 +215,16 @@ int verify_certificate(int preverify_ok, X509_STORE_CTX *ctx)
+ 	i2d_PUBKEY(pkey, &p);
+ 	EVP_PKEY_free(pkey);
+ 
++	/* Get nonce from sent hello */
++	uint8_t nonce_buffer[MAX_NONCE_SIZE];
++	size_t nonce_buffer_size = sizeof(nonce_buffer);
++
++	t_err = openssl_tls_get_nonce(tls_ctx, false, nonce_buffer, &nonce_buffer_size);
++	if (t_err != TLS_WRAPPER_ERR_NONE) {
++		RTLS_ERR("faild to get sent nonce %#x\n", t_err);
++		return 0;
++	}
++
+ 	/* Extract the RATS-TLS certificate evidence_buffer(optional for nullverifier) and endorsements_buffer(optional) from the TLS
+ 	 * certificate extension.
+ 	 */
+@@ -235,8 +249,9 @@ int verify_certificate(int preverify_ok, X509_STORE_CTX *ctx)
+ 		return rc;
+ 	}
+ 
+-	tls_wrapper_err_t t_err = tls_wrapper_verify_certificate_extension(
+-		tls_ctx, pubkey_buffer, pubkey_buffer_size, evidence_buffer, evidence_buffer_size,
++	t_err = tls_wrapper_verify_certificate_extension(
++		tls_ctx, pubkey_buffer, pubkey_buffer_size, nonce_buffer, nonce_buffer_size,
++		evidence_buffer, evidence_buffer_size,
+ 		endorsements_buffer, endorsements_buffer_size);
+ 	if (t_err != TLS_WRAPPER_ERR_NONE) {
+ 		RTLS_ERR("failed to verify certificate extension %#x\n", t_err);
+@@ -245,3 +260,18 @@ int verify_certificate(int preverify_ok, X509_STORE_CTX *ctx)
+ 
+ 	return SSL_SUCCESS;
+ }
++
++int generate_certificate(SSL *ssl, void *ctx)
++{
++    RTLS_DEBUG("ssl: %p, ctx: %p\n", ssl, ctx);
++    rats_tls_err_t err;
++    tls_wrapper_ctx_t *ctx_tls = (tls_wrapper_ctx_t *) ctx; 
++
++	err = rtls_core_generate_certificate(ctx_tls->rtls_handle);
++	if (err != RATS_TLS_ERR_NONE){
++		return 0;
++	}
++
++	return 1;
++
++}
+\ No newline at end of file
+diff --git a/src/tls_wrappers/openssl/use_cert.c b/src/tls_wrappers/openssl/use_cert.c
+index 768295d..d65d733 100644
+--- a/src/tls_wrappers/openssl/use_cert.c
++++ b/src/tls_wrappers/openssl/use_cert.c
+@@ -16,8 +16,8 @@ tls_wrapper_err_t openssl_tls_use_cert(tls_wrapper_ctx_t *ctx, rats_tls_cert_inf
+ 		return -TLS_WRAPPER_ERR_INVALID;
+ 
+ 	openssl_ctx_t *ssl_ctx = (openssl_ctx_t *)ctx->tls_private;
+-	int ret = SSL_CTX_use_certificate_ASN1(ssl_ctx->sctx, cert_info->cert_len,
+-					       cert_info->cert_buf);
++	int ret = SSL_use_certificate_ASN1(ssl_ctx->ssl, 
++					       cert_info->cert_buf, cert_info->cert_len);
+ 	if (ret != SSL_SUCCESS) {
+ 		RTLS_ERR("failed to use certificate %d\n", ret);
+ 		return OPENSSL_ERR_CODE(ret);
+diff --git a/src/tls_wrappers/openssl/use_privkey.c b/src/tls_wrappers/openssl/use_privkey.c
+index 447f253..ca2928e 100644
+--- a/src/tls_wrappers/openssl/use_privkey.c
++++ b/src/tls_wrappers/openssl/use_privkey.c
+@@ -28,7 +28,7 @@ tls_wrapper_err_t openssl_tls_use_privkey(tls_wrapper_ctx_t *ctx, rats_tls_cert_
+ 		return -CRYPTO_WRAPPER_ERR_UNSUPPORTED_ALGO;
+ 	}
+ 
+-	int ret = SSL_CTX_use_PrivateKey_ASN1(EPKEY, ssl_ctx->sctx, privkey_buf, (long)privkey_len);
++	int ret = SSL_use_PrivateKey_ASN1(EPKEY, ssl_ctx->ssl, privkey_buf, (long)privkey_len);
+ 
+ 	if (ret != SSL_SUCCESS) {
+ 		RTLS_ERR("failed to use private key.\n");
+diff --git a/src/tls_wrappers/openssl/x509_openssl10x.c b/src/tls_wrappers/openssl/x509_openssl10x.c
+index da269ed..437949d 100644
+--- a/src/tls_wrappers/openssl/x509_openssl10x.c
++++ b/src/tls_wrappers/openssl/x509_openssl10x.c
+@@ -5,9 +5,8 @@
+  */
+ 
+ #include <openssl/opensslv.h>
+-
+-// clang-format off
+ #if OPENSSL_VERSION_NUMBER < 0x10100000L
++// clang-format off
+ #include <openssl/x509.h>
+ #include <openssl/x509v3.h>
+ #include <openssl/ssl.h>
+diff --git a/src/verifiers/CMakeLists.txt b/src/verifiers/CMakeLists.txt
+index 3f0103c..0e4cd6b 100644
+--- a/src/verifiers/CMakeLists.txt
++++ b/src/verifiers/CMakeLists.txt
+@@ -1,6 +1,8 @@
+ add_subdirectory(nullverifier)
+ 
+-include(FindSgxDcapQuoteVerify)
++if(HOST OR TDX OR SGX)
++    include(FindSgxDcapQuoteVerify)
++endif()
+ 
+ if(HOST OR TDX)
+     if(SGXDCAPQV_FOUND)
+@@ -28,3 +30,7 @@ endif()
+ if(SGX)
+     add_subdirectory(sgx-la)
+ endif()
++
++if(VIRTCCA)
++    add_subdirectory(virtcca)
++endif()
+diff --git a/src/verifiers/internal/rtls_enclave_verifier_select.c b/src/verifiers/internal/rtls_enclave_verifier_select.c
+index 217bbb7..19303ac 100644
+--- a/src/verifiers/internal/rtls_enclave_verifier_select.c
++++ b/src/verifiers/internal/rtls_enclave_verifier_select.c
+@@ -32,7 +32,7 @@ rats_tls_err_t rtls_verifier_select(rtls_core_context_t *ctx, const char *name,
+ 	RTLS_DEBUG("selecting the enclave verifier '%s' ...\n", name);
+ 
+ 	enclave_verifier_ctx_t *verifier_ctx = NULL;
+-	for (unsigned int i = 0; i < enclave_verifier_nums; ++i) {
++	for (unsigned int i = 0; i < registerd_enclave_verifier_nums; ++i) {
+ 		RTLS_DEBUG("trying to match %s ...\n", enclave_verifiers_ctx[i]->opts->name);
+ 
+ 		if (name && strcmp(name, enclave_verifiers_ctx[i]->opts->name))
+diff --git a/src/verifiers/sev-snp/pre_init.c b/src/verifiers/sev-snp/pre_init.c
+index 4f9eed4..4525c3f 100644
+--- a/src/verifiers/sev-snp/pre_init.c
++++ b/src/verifiers/sev-snp/pre_init.c
+@@ -7,28 +7,31 @@
+ #include <rats-tls/log.h>
+ #include <rats-tls/verifier.h>
+ 
+-#define TOOL_NUM 3
+-#define TOOL_BUF 16
++#define TOOL_NUM  3
++#define TOOL_NAME 10
+ 
+ enclave_verifier_err_t sev_snp_verifier_pre_init(void)
+ {
+ 	RTLS_DEBUG("called\n");
+ 
+-	/* These tools are used to verify SEV-SNP report */
+-	const char names[TOOL_NUM][TOOL_BUF] = { "openssl", "wget", "csplit" };
+-	const char parameters[TOOL_NUM][TOOL_BUF] = { "version", "-V", "--version" };
+-
+-	for (unsigned int i = 0; i < TOOL_NUM; ++i) {
+-		char cmdline_str[64];
++	enclave_verifier_err_t err = ENCLAVE_VERIFIER_ERR_NONE;
+ 
+-		snprintf(cmdline_str, sizeof(cmdline_str), "%s %s >/dev/null 2>&1", names[i],
+-			 parameters[i]);
+-
+-		if (system(cmdline_str)) {
+-			RTLS_ERR("Please install %s for sev_snp verifier\n", names[i]);
+-			return -ENCLAVE_VERIFIER_ERR_NO_TOOL;
++	/* These tools are used to verify SEV-SNP report */
++	char tools_name[TOOL_NUM][TOOL_NAME] = { "openssl", "wget", "csplit" };
++	char cmdline_str[50] = {
++		0,
++	};
++
++	for (int i = 0; i < TOOL_NUM; i++) {
++		int count = snprintf(cmdline_str, sizeof(cmdline_str),
++				     "which %s 1> /dev/null 2> /dev/null", tools_name[i]);
++		cmdline_str[count] = '\0';
++
++		if (system(cmdline_str) != 0) {
++			RTLS_ERR("please install tool %s\n", tools_name[i]);
++			err = -ENCLAVE_VERIFIER_ERR_NO_TOOL;
+ 		}
+ 	}
+ 
+-	return ENCLAVE_VERIFIER_ERR_NONE;
++	return err;
+ }
+diff --git a/src/verifiers/sev/pre_init.c b/src/verifiers/sev/pre_init.c
+index ef89e57..46350e1 100644
+--- a/src/verifiers/sev/pre_init.c
++++ b/src/verifiers/sev/pre_init.c
+@@ -11,10 +11,13 @@ enclave_verifier_err_t sev_verifier_pre_init(void)
+ {
+ 	RTLS_DEBUG("called\n");
+ 
+-	if (!system("wget -V >/dev/null 2>&1"))
+-		return ENCLAVE_VERIFIER_ERR_NONE;
++	enclave_verifier_err_t err = ENCLAVE_VERIFIER_ERR_NONE;
+ 
+-	RTLS_ERR("Please install wget for sev verifier\n");
++	char *cmdline_str = "which wget 1> /dev/null 2> /dev/null";
++	if (system(cmdline_str) != 0) {
++		RTLS_ERR("please install wget for sev(-es) verify\n");
++		err = -ENCLAVE_VERIFIER_ERR_NO_TOOL;
++	}
+ 
+-	return -ENCLAVE_VERIFIER_ERR_NO_TOOL;
++	return err;
+ }
+diff --git a/src/verifiers/virtcca/CMakeLists.txt b/src/verifiers/virtcca/CMakeLists.txt
+new file mode 100644
+index 0000000..b87d3d2
+--- /dev/null
++++ b/src/verifiers/virtcca/CMakeLists.txt
+@@ -0,0 +1,39 @@
++# Project name
++project(verifier_virtcca)
++
++# add_subdirectory(qcbor)
++
++# Set include directory
++set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../../include
++                 ${CMAKE_CURRENT_SOURCE_DIR}/../../include/rats-tls
++                 ${CMAKE_CURRENT_SOURCE_DIR}/../../include/internal
++                 ${CMAKE_CURRENT_SOURCE_DIR}
++                 /usr/include
++                 ./qcbor/inc
++                 )
++include_directories(${INCLUDE_DIRS})
++
++# Set dependency library directory
++set(LIBRARY_DIRS ${CMAKE_BINARY_DIR}/src
++                 ${RATS_TLS_INSTALL_LIB_PATH}
++                 )
++
++link_directories(${LIBRARY_DIRS})
++
++# Set source file
++set(SOURCES cleanup.c
++            init.c
++            main.c
++            pre_init.c
++            verify_evidence.c
++            token_parse.c
++            )
++
++# Generate library
++add_library(${PROJECT_NAME} SHARED ${SOURCES})
++target_link_libraries(${PROJECT_NAME} ${RATS_TLS_LDFLAGS} ${RTLS_LIB} qcbor)
++set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${VERSION} SOVERSION ${VERSION_MAJOR})
++
++# Install library
++install(TARGETS ${PROJECT_NAME}
++	DESTINATION ${RATS_TLS_INSTALL_LIBV_PATH})
+diff --git a/src/verifiers/virtcca/cleanup.c b/src/verifiers/virtcca/cleanup.c
+new file mode 100644
+index 0000000..ea0f34f
+--- /dev/null
++++ b/src/verifiers/virtcca/cleanup.c
+@@ -0,0 +1,20 @@
++/* Copyright (c) 2021 Intel Corporation
++ * Copyright (c) 2020-2021 Alibaba Cloud
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <rats-tls/log.h>
++#include <rats-tls/verifier.h>
++#include "token_parse.h"
++
++enclave_verifier_err_t virtcca_verifier_cleanup(enclave_verifier_ctx_t *ctx)
++{
++	RTLS_DEBUG("called enclave verifier ctx: %p\n", ctx);
++
++	cca_token_t *virtcca_token = (cca_token_t *)ctx->verifier_private;
++
++	free(virtcca_token);
++
++	return ENCLAVE_VERIFIER_ERR_NONE;
++}
+diff --git a/src/verifiers/virtcca/init.c b/src/verifiers/virtcca/init.c
+new file mode 100644
+index 0000000..5e537c4
+--- /dev/null
++++ b/src/verifiers/virtcca/init.c
+@@ -0,0 +1,23 @@
++/* Copyright (c) 2021 Intel Corporation
++ * Copyright (c) 2020-2021 Alibaba Cloud
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <rats-tls/log.h>
++#include <rats-tls/verifier.h>
++#include "token_parse.h"
++
++enclave_verifier_err_t virtcca_verifier_init(enclave_verifier_ctx_t *ctx, rats_tls_cert_algo_t algo)
++{
++	RTLS_DEBUG("ctx %p, algo %d\n", ctx, algo);
++	cca_token_buf_t *cca_token_buf = calloc(1, sizeof(cca_token_buf_t));
++
++	if (!cca_token_buf) {
++		return -ENCLAVE_ATTESTER_ERR_NO_MEM;
++	}
++
++	ctx->verifier_private = cca_token_buf;
++
++	return ENCLAVE_VERIFIER_ERR_NONE;
++}
+diff --git a/src/verifiers/virtcca/main.c b/src/verifiers/virtcca/main.c
+new file mode 100644
+index 0000000..71d959f
+--- /dev/null
++++ b/src/verifiers/virtcca/main.c
+@@ -0,0 +1,33 @@
++#include <stdio.h>
++#include <rats-tls/verifier.h>
++#include <rats-tls/log.h>
++
++extern enclave_verifier_err_t enclave_verifier_register(enclave_verifier_opts_t *);
++extern enclave_verifier_err_t virtcca_verifier_pre_init(void);
++extern enclave_verifier_err_t virtcca_verifier_init(enclave_verifier_ctx_t *,
++													rats_tls_cert_algo_t algo);
++extern enclave_verifier_err_t virtcca_verify_evidence(enclave_verifier_ctx_t *,
++							   						  attestation_evidence_t *, uint8_t *,
++							   						  uint32_t hash_len,
++							   						  attestation_endorsement_t *endorsements);
++extern enclave_verifier_err_t virtcca_verifier_cleanup(enclave_verifier_ctx_t *);
++
++static enclave_verifier_opts_t virtcca_verifier_opts = {
++	.api_version = ENCLAVE_VERIFIER_API_VERSION_DEFAULT,
++	.flags = ENCLAVE_VERIFIER_OPTS_FLAGS_VIRTCCA,
++	.name = "virtcca",
++	.priority = 10,
++	.pre_init = virtcca_verifier_pre_init,
++	.init = virtcca_verifier_init,
++	.verify_evidence = virtcca_verify_evidence,
++	.cleanup = virtcca_verifier_cleanup,
++};
++
++void __attribute__((constructor)) libverifier_virtcca_init(void)
++{
++	RTLS_DEBUG("called\n");
++
++	enclave_verifier_err_t err = enclave_verifier_register(&virtcca_verifier_opts);
++	if (err != ENCLAVE_VERIFIER_ERR_NONE)
++		RTLS_ERR("failed to register the enclave verifier 'virtcca' %#x\n", err);
++}
+diff --git a/src/verifiers/virtcca/pre_init.c b/src/verifiers/virtcca/pre_init.c
+new file mode 100644
+index 0000000..e176563
+--- /dev/null
++++ b/src/verifiers/virtcca/pre_init.c
+@@ -0,0 +1,15 @@
++/* Copyright (c) 2021 Intel Corporation
++ * Copyright (c) 2020-2021 Alibaba Cloud
++ *
++ * SPDX-License-Identifier: Apache-2.0
++ */
++
++#include <rats-tls/log.h>
++#include <rats-tls/verifier.h>
++
++enclave_verifier_err_t virtcca_verifier_pre_init(void)
++{
++	RTLS_DEBUG("called\n");
++
++	return ENCLAVE_VERIFIER_ERR_NONE;
++}
+diff --git a/src/verifiers/virtcca/token_parse.c b/src/verifiers/virtcca/token_parse.c
+new file mode 100644
+index 0000000..1468c4a
+--- /dev/null
++++ b/src/verifiers/virtcca/token_parse.c
+@@ -0,0 +1,382 @@
++#include "token_parse.h"
++#include <errno.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++static bool check_item_type_size(const QCBORItem *item, int data_type,
++                                 const int *sizes, int num_sizes)
++{
++    if (item->uDataType != data_type) {
++        return false;
++    }
++    if (sizes != NULL && num_sizes > 0) {
++        for (int i = 0; i < num_sizes; ++i) {
++            if (item->val.string.len == sizes[i]) {
++                return true;
++            }
++        }
++        return false;
++    } else {
++        return true;
++    }
++}
++
++static inline bool check_item_array_count(const QCBORItem *item, int count)
++{
++    if (item->uDataType != QCBOR_TYPE_ARRAY || count != item->val.uCount) {
++        return false;
++    } else {
++        return true;
++    }
++}
++
++static inline bool check_item_bstring_size(const QCBORItem *item, const int *sizes, int num_sizes)
++{
++    return check_item_type_size(item, QCBOR_TYPE_BYTE_STRING, sizes, num_sizes);
++}
++
++static inline bool check_item_tstring_size(const QCBORItem *item, const int *sizes, int num_sizes)
++{
++    return check_item_type_size(item, QCBOR_TYPE_TEXT_STRING, sizes, num_sizes);
++}
++
++static uint64_t parse_cvm_claims(cvm_claims_t *claim,
++                                 qbuf_t *raw)
++{
++    QCBORItem item;
++    QCBORDecodeContext decode_context;
++    uint8_t *_;
++    QCBORError ret = QCBOR_SUCCESS;
++    int claim_cnt = 0;
++
++    QCBORDecode_Init(&decode_context, *raw, QCBOR_DECODE_MODE_NORMAL);
++    QCBORDecode_EnterBstrWrapped(&decode_context, QCBOR_TAG_REQUIREMENT_NOT_A_TAG, NULL);
++    QCBORDecode_VGetNext(&decode_context, &item);
++    if (item.uDataType != QCBOR_TYPE_MAP) {
++        printf("Attestation token error formatting: Invalid cvm claim map format\n");
++        return VIRTCCA_ERROR;
++    }
++
++    while (ret == QCBOR_SUCCESS) {
++        QCBORDecode_VGetNext(&decode_context, &item);
++        ret = QCBORDecode_GetError(&decode_context);
++        if (ret != QCBOR_SUCCESS) {
++            break;
++        }
++    
++        if (item.uLabelType == QCBOR_TYPE_INT64) {
++            claim_cnt = claim_cnt + 1;
++            switch (item.label.int64) {
++                case CCA_CVM_CHALLENGE:
++                    if (!check_item_bstring_size(&item, (int[]){CCA_BYTE_SIZE_64}, 1)) {
++                        printf("cVM challenge is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->challenge = item.val.string;
++                    break;
++
++                case CCA_CVM_PERSONALIZATION_VALUE:
++                    if (!check_item_bstring_size(&item, (int[]){CCA_BYTE_SIZE_64}, 1)) {
++                        printf("cVM personalization value is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->rpv = item.val.string;
++                    break;
++
++                case CCA_CVM_INITIAL_MEASUREMENT:
++                    if (!check_item_bstring_size(&item,
++                            (int[]){CCA_BYTE_SIZE_32, CCA_BYTE_SIZE_48, CCA_BYTE_SIZE_64}, 3)) {
++                        printf("cVM initial measurement is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->rim = item.val.string;
++                    break;
++
++                case CCA_CVM_EXTENSIBLE_MEASUREMENTS:
++                    if (check_item_array_count(&item, CCA_CVM_EXTED_MEAS_SLOTS_NUM)) {
++                        for (int i = 0; i < CCA_CVM_EXTED_MEAS_SLOTS_NUM; i++) {
++                            QCBORDecode_VGetNext(&decode_context, &item);
++                            if (check_item_bstring_size(&item,
++                                   (int[]){CCA_BYTE_SIZE_32, CCA_BYTE_SIZE_48, CCA_BYTE_SIZE_64}, 3)) {
++                                claim->rem[i] = item.val.string;
++                            } else {
++                                printf("cVM extensible measurement is not in expected format\n");
++                                return VIRTCCA_ERROR;
++                            }
++                        }
++                    } else {
++                        printf("cVM extensible measurement is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    break;
++
++                case CCA_CVM_PUB_KEY:
++                    if (!check_item_bstring_size(&item, (int[]){CCA_BYTE_SIZE_550}, 1)) {
++                        printf("cVM public key is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->pub_key = item.val.string;
++                    break;
++
++                case CCA_CVM_HASH_ALGO_ID:
++                    if (!check_item_tstring_size(&item, NULL, 0)) {
++                        printf("cVM hash algo is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->hash_algo_id = item.val.string;
++                    break;
++
++                case CCA_CVM_PUB_KEY_HASH_ALGO_ID:
++                    if (!check_item_tstring_size(&item, NULL, 0)) {
++                        printf("cVM public key hash algo is not in expected format\n");
++                        return VIRTCCA_ERROR;
++                    }
++                    claim->pub_key_hash_algo_id = item.val.string;
++                    break;
++
++                default:
++                    claim_cnt = claim_cnt - 1;
++                    break;
++            }
++        } else {
++            printf("Un-supported label type %d\n", item.uLabelType);
++            return VIRTCCA_ERROR;
++        }
++    }
++
++    QCBORDecode_ExitBstrWrapped(&decode_context);
++
++    if (ret == QCBOR_ERR_NO_MORE_ITEMS) {
++        if (claim_cnt != CCA_CVM_CLAIM_CNT) {
++            printf("Number of cVM claims %d is incorrect\n", claim_cnt);
++            return VIRTCCA_ERROR;
++        } else {
++            return VIRTCCA_SUCCESS;
++        }
++    } else {
++        return VIRTCCA_ERROR;
++    }
++}
++
++static uint64_t parse_cose_sign1(cose_sign1_envelop_t *envelop,
++                                 qbuf_t *raw)
++{
++    QCBORItem item;
++    QCBORDecodeContext decode_context;
++    uint8_t *_;
++    QCBORError ret;
++
++    QCBORDecode_Init(&decode_context, *raw, QCBOR_DECODE_MODE_NORMAL);
++    QCBORDecode_VGetNext(&decode_context, &item);
++
++    if (item.uDataType != QCBOR_TYPE_ARRAY || item.val.uCount != 4 ||
++        QCBORDecode_GetNthTag(&decode_context, &item, 0) != CBOR_TAG_COSE_SIGN1) {
++        printf("Attestation token error formatting: Cannot get COSE_SIGN1 envelop\n");
++        return VIRTCCA_ERROR;
++    }
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Protected headers */
++    envelop->p_headers = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Unprotected headers */
++    envelop->np_headers = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Payload */
++    envelop->payload = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item); /* Signature */
++    envelop->signature = item.val.string;
++
++    QCBORDecode_VGetNext(&decode_context, &item);
++    ret = QCBORDecode_Finish(&decode_context);
++    if (QCBOR_ERR_NO_MORE_ITEMS != ret) {
++        printf("Unexpected return code %d\n", ret);
++        return VIRTCCA_ERROR;
++    }
++
++    return VIRTCCA_SUCCESS;
++}
++
++uint64_t parse_cca_attestation_token(cca_token_t *token, uint8_t *raw_token, size_t raw_token_size)
++{
++    uint64_t status = VIRTCCA_SUCCESS;
++    QCBORItem item;
++    QCBORDecodeContext decode_context;
++
++    qbuf_t raw_cca_token;
++    qbuf_t raw_platform_envelop;
++    qbuf_t raw_cvm_envelop;
++    errno = EIO;
++    QCBORError ret;
++
++    raw_cca_token.ptr = raw_token;
++    raw_cca_token.len = raw_token_size;
++
++    QCBORDecode_Init(&decode_context, raw_cca_token, QCBOR_DECODE_MODE_NORMAL);
++    QCBORDecode_VGetNext(&decode_context, &item);
++    if (item.uDataType != QCBOR_TYPE_MAP || item.val.uCount != 1 ||
++        QCBORDecode_GetNthTag(&decode_context, &item, 0) != TAG_CCA_TOKEN) {
++        printf("Attestation token error formatting: This may not be CCA token\n");
++        return VIRTCCA_ERROR;
++    }
++
++    QCBORDecode_VGetNext(&decode_context, &item);
++    if (item.uDataType != QCBOR_TYPE_BYTE_STRING || 
++        item.label.int64 != CCA_CVM_TOKEN) {
++        printf("Attestation token error formatting: Cannot get CVM token\n");
++        return VIRTCCA_ERROR;
++    }
++
++    raw_cvm_envelop = item.val.string;
++    token->cvm_cose = raw_cvm_envelop;
++    status = parse_cose_sign1(&token->cvm_envelop,
++                              &raw_cvm_envelop);
++    if (status != VIRTCCA_SUCCESS) {
++        printf("Failed to decode cvm COSE_Sign1 envelop\n");
++        return status;
++    }
++
++    status = parse_cvm_claims(&token->cvm_token, &token->cvm_envelop.payload);
++    if (status != VIRTCCA_SUCCESS) {
++        printf("Failed to parse cvm claim map\n");
++        return status;
++    }
++
++    QCBORDecode_VGetNext(&decode_context, &item);
++    ret =  QCBORDecode_Finish(&decode_context);
++    if (QCBOR_ERR_NO_MORE_ITEMS != ret) {
++        printf("Unexpected return code %d\n", ret);
++        return ret;
++    }
++
++    return VIRTCCA_SUCCESS;
++}
++
++void print_cca_attestation_token_raw(const cca_token_t *token)
++{
++    const uint8_t *_p;
++    int _l;
++    printf("CCA attestation token\n");
++    printf("CVM token\n");
++
++    printf("\tProtected headers: ");
++    _p = token->cvm_envelop.p_headers.ptr;
++    _l = token->cvm_envelop.p_headers.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tUn-Protected headers: ");
++    _p = token->cvm_envelop.np_headers.ptr;
++    _l = token->cvm_envelop.np_headers.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tPayload: ");
++    _p = token->cvm_envelop.payload.ptr;
++    _l = token->cvm_envelop.payload.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tSignature: ");
++    _p = token->cvm_envelop.signature.ptr;
++    _l = token->cvm_envelop.signature.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n\n");
++}
++
++void print_cca_attestation_token(const cca_token_t *token)
++{
++    const uint8_t *_p;
++    int _l;
++
++    printf("Parsed CCA attestation token\n");
++    printf("CVM token\n");
++
++    printf("\tChallenge: ");
++    _p = token->cvm_token.challenge.ptr;
++    _l = token->cvm_token.challenge.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tRPV: ");
++    _p = token->cvm_token.rpv.ptr;
++    _l = token->cvm_token.rpv.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tRIM: ");
++    _p = token->cvm_token.rim.ptr;
++    _l = token->cvm_token.rim.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[0]: ");
++    _p = token->cvm_token.rem[0].ptr;
++    _l = token->cvm_token.rem[0].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[1]: ");
++    _p = token->cvm_token.rem[1].ptr;
++    _l = token->cvm_token.rem[1].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[2]: ");
++    _p = token->cvm_token.rem[2].ptr;
++    _l = token->cvm_token.rem[2].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tREM[3]: ");
++    _p = token->cvm_token.rem[3].ptr;
++    _l = token->cvm_token.rem[3].len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tHash Algo ID: ");
++    _p = token->cvm_token.hash_algo_id.ptr;
++    _l = token->cvm_token.hash_algo_id.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%c", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tPublic Key: ");
++    _p = token->cvm_token.pub_key.ptr;
++    _l = token->cvm_token.pub_key.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%02x", _p[i]);
++    }
++    printf("\n");
++
++    printf("\tPublic Key Hash Algo ID: ");
++    _p = token->cvm_token.pub_key_hash_algo_id.ptr;
++    _l = token->cvm_token.pub_key_hash_algo_id.len;
++    for (unsigned int i = 0U; i < _l; ++i) {
++        printf("%c", _p[i]);
++    }
++    printf("\n");
++}
+diff --git a/src/verifiers/virtcca/token_parse.h b/src/verifiers/virtcca/token_parse.h
+new file mode 100644
+index 0000000..99b10d8
+--- /dev/null
++++ b/src/verifiers/virtcca/token_parse.h
+@@ -0,0 +1,104 @@
++#ifndef TOKEN_PARSE_H
++#define TOKEN_PARSE_H
++
++#include "qcbor/qcbor.h"
++#include "qcbor/qcbor_spiffy_decode.h"
++
++#define ATTEST_MAX_TOKEN_SIZE 4096
++
++#define TAG_CCA_TOKEN                       (399)
++#define CCA_PLAT_TOKEN                      (44234)
++#define CCA_CVM_TOKEN                       (44241)
++
++#define CCA_CVM_CHALLENGE                   (10)
++#define CCA_CVM_PERSONALIZATION_VALUE       (44235)
++#define CCA_CVM_HASH_ALGO_ID                (44236)
++#define CCA_CVM_PUB_KEY                     (44237)
++#define CCA_CVM_INITIAL_MEASUREMENT         (44238)
++#define CCA_CVM_EXTENSIBLE_MEASUREMENTS     (44239)
++#define CCA_CVM_EXTED_MEAS_SLOTS_NUM        (4)
++#define CCA_CVM_PUB_KEY_HASH_ALGO_ID        (44240)
++
++#define CCA_BYTE_SIZE_32    (32)
++#define CCA_BYTE_SIZE_48    (48)
++#define CCA_BYTE_SIZE_64    (64)
++
++#define CCA_BYTE_SIZE_33    (33)
++#define CCA_BYTE_SIZE_97    (97)
++
++#define CCA_BYTE_SIZE_550   (550)
++
++#define VIRTCCA_SUCCESS     (0)
++#define VIRTCCA_ERROR       (1)
++
++#define CCA_CVM_CLAIM_CNT   (7)
++
++typedef struct q_useful_buf_c qbuf_t;
++
++/*
++ * DEN0137 Realm Management Monitor Specification (1.0-eac5)
++ *
++ * CCA attestation token {                     // Tag: 399 (cca-token-collection)
++ *     CVM token {                             // 44241
++ *         COSE_Sign1 envelop {                // 18 (COSE_Sign1)
++ *             Protected headers
++ *             Unprotected headers
++ *             CVM token claim map {           // Payload
++ *                 challenge                   // 10
++ *                 rpv                         // 44235
++ *                 rim                         // 44238
++ *                 rem[4]                      // 44239
++ *                 cvm_hash_algo_id            // 44236
++ *                 pub_key                     // 44237
++ *                 pub_key_hash_algo_id        // 44240
++ *             }
++ *             Signature(RAK)
++ *         }
++ *     }
++ * }
++*/
++
++typedef struct {
++    qbuf_t component_type; /* t */
++    qbuf_t measurement; /* b */
++    qbuf_t version; /* t */
++    qbuf_t signer_id; /* b */
++    qbuf_t hash_algo_id; /* t */
++} sw_comp_claims_t;
++
++typedef struct {
++    qbuf_t challenge;                   /* 10 */
++    qbuf_t rpv;                         /* 44235 */
++    qbuf_t rim;                         /* 44238 */
++    qbuf_t rem[4];                      /* 44239 */
++    qbuf_t hash_algo_id;                /* 44236 */
++    qbuf_t pub_key;                     /* 44237 */
++    qbuf_t pub_key_hash_algo_id;        /* 44240 */
++} cvm_claims_t;
++
++typedef struct {
++    qbuf_t p_headers;
++    qbuf_t np_headers;
++    qbuf_t payload;
++    qbuf_t signature;
++} cose_sign1_envelop_t;
++
++typedef struct {
++    cose_sign1_envelop_t cvm_envelop;
++    qbuf_t               cvm_cose;
++    cvm_claims_t         cvm_token;
++} cca_token_t;
++
++#define MAX_TOKEN_SIZE (4096U)
++
++typedef struct {
++    uint8_t buf[MAX_TOKEN_SIZE];
++    size_t buf_size;
++} cca_token_buf_t;
++
++uint64_t parse_cca_attestation_token(cca_token_t *token,
++                                     uint8_t *raw_token, size_t raw_token_size);
++void print_cca_attestation_token(const cca_token_t *token);
++void print_cca_attestation_token_raw(const cca_token_t *token);
++
++#endif /* TOKEN_PARSE_H */
+\ No newline at end of file
+diff --git a/src/verifiers/virtcca/verify_evidence.c b/src/verifiers/virtcca/verify_evidence.c
+new file mode 100644
+index 0000000..4287ce2
+--- /dev/null
++++ b/src/verifiers/virtcca/verify_evidence.c
+@@ -0,0 +1,64 @@
++#include <rats-tls/log.h>
++#include <rats-tls/verifier.h>
++#include "token_parse.h"
++
++enclave_verifier_err_t virtcca_verify_evidence(enclave_verifier_ctx_t *ctx,
++						    attestation_evidence_t *evidence, uint8_t *hash, unsigned int hash_len,
++						    __attribute__((unused)) attestation_endorsement_t *endorsements)
++{
++	RTLS_DEBUG("ctx %p, evidence %p, hash %p endorsements %p\n", ctx, evidence, hash,
++		   endorsements);
++
++	int ret;
++	size_t device_cert_len;
++    uint8_t *device_cert_data;
++    cca_token_t virtcca_token = {0};
++
++	cca_token_buf_t *cca_token_buf = (cca_token_buf_t *)ctx->verifier_private;
++	memset(cca_token_buf, 0, sizeof(cca_token_buf_t));
++    memcpy(&cca_token_buf->buf_size, evidence->virtcca.report, sizeof(cca_token_buf->buf_size));
++    if (cca_token_buf->buf_size > (MAX_TOKEN_SIZE)) {
++        RTLS_ERR("report data too long\n");
++        return ENCLAVE_VERIFIER_ERR_NO_MEM;
++    }
++
++    memcpy(cca_token_buf->buf, evidence->virtcca.report + sizeof(cca_token_buf->buf_size), cca_token_buf->buf_size);
++
++    memcpy(&device_cert_len, evidence->virtcca.report + sizeof(cca_token_buf->buf_size) + cca_token_buf->buf_size, sizeof(device_cert_len));
++
++    device_cert_data = (uint8_t *)malloc(device_cert_len);
++    if (device_cert_data == NULL) {
++        RTLS_ERR("failed to allocate memory for device_cert_data\n");
++        return ENCLAVE_VERIFIER_ERR_NO_MEM;
++    }
++    memcpy(device_cert_data, evidence->virtcca.report + sizeof(cca_token_buf->buf_size) + cca_token_buf->buf_size + sizeof(device_cert_len), device_cert_len);
++
++    // parse cca_token_buf
++    ret = parse_cca_attestation_token(&virtcca_token, cca_token_buf->buf, cca_token_buf->buf_size);
++    if (ret != VIRTCCA_SUCCESS) {
++        RTLS_ERR("failed to parse virtcca token\n");
++        free(device_cert_data);
++        return ENCLAVE_VERIFIER_ERR_CBOR;
++    }
++	print_cca_attestation_token_raw(&virtcca_token);
++    print_cca_attestation_token(&virtcca_token);
++
++	if (memcmp(virtcca_token.cvm_token.challenge.ptr, hash, hash_len)) {
++		RTLS_ERR("unmatched key binder hash value versus challenge in evidence\n");
++		return ENCLAVE_ATTESTER_ERR_INVALID;
++	}
++
++    // device_cert
++    FILE *device_cert_file = fopen("./aik_cert.der", "wb");
++    if (device_cert_file == NULL) {
++        RTLS_ERR("failed to open file for device certificate\n");
++        free(device_cert_data);
++        return ENCLAVE_ATTESTER_ERR_UNKNOWN;
++    }
++    fwrite(device_cert_data, 1, device_cert_len, device_cert_file);
++    fclose(device_cert_file);
++
++    free(device_cert_data);
++
++	return ENCLAVE_VERIFIER_ERR_NONE;
++}
+\ No newline at end of file
+-- 
+2.38.1.windows.1
+
