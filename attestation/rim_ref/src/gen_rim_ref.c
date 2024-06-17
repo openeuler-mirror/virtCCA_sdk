@@ -370,7 +370,7 @@ void measure_load_data(cvm_init_measure_t *meas,
 		uint64_t hdrvals[2];
 		memcpy(&hdrvals, buffer_k_tmp + ARM64_TEXT_OFFSET_OFFSET, sizeof(hdrvals));
 		kernel_size_k = hdrvals[1];
-		kernel_size_k = round_up(kernel_size_k, BLOCK_SIZE);
+		kernel_size_k = round_up(kernel_size_k, L3_GRANULE);
 	}
 	buffer_k = (unsigned char *)malloc(kernel_size_k);
 	if (buffer_k == NULL) {
@@ -382,16 +382,13 @@ void measure_load_data(cvm_init_measure_t *meas,
 	memcpy(buffer_k, buffer_k_tmp, size);
 	free(buffer_k_tmp);
 
-	for (uint64_t i = 0; i < kernel_size_k / BLOCK_SIZE; i++) {
-		for (uint64_t j = 0; j < BLOCK_SIZE / 4096; j++)
-		{
-			memset(&params, 0, sizeof(params));
-			params.data = (uint64_t *)(buffer_k + i * BLOCK_SIZE + j * 4096);
-			params.size = 4096;
-			SET_BIT(params.flags, 0);
-			params.ipa = addr + i * BLOCK_SIZE + j * 4096;
-			measure_tmi_data_create(meas, &params);
-		}
+	for (uint64_t i = 0; i < kernel_size_k / L3_GRANULE; i++) {
+		memset(&params, 0, sizeof(params));
+		params.data = (uint64_t *)(buffer_k + i * 4096);
+		params.size = 4096;
+		SET_BIT(params.flags, 0);
+		params.ipa = addr + i * 4096;
+		measure_tmi_data_create(meas, &params);
 	}
 
 	/* Useless measurement */
@@ -539,9 +536,9 @@ void generate_rim_reference(const char *kernel_path, const char *dtb_path,
 	measure_create_cvm(&meas, lpa2_enable, sve_enable, pmu_enable,
 					   ipa_width, sve_vector_length, num_bps, num_wps,
 					   num_pmu, hash_algo);
-	measure_create_tecs(&meas, loader_start, tec_num);
 	measure_load_data(&meas, loader_start, ram_size, initrd_start,
 					  kernel_path, initramfs_path, dtb_path);
+	measure_create_tecs(&meas, loader_start, tec_num);
 	printf("RIM-");
 	print_hash(meas.rim, meas.measurement_algo);
 }
