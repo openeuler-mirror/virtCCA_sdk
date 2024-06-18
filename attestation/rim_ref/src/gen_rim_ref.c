@@ -303,7 +303,6 @@ void measure_tmi_data_create(cvm_init_measure_t *meas, tmi_data_create_params_t 
 
 void measure_load_data(cvm_init_measure_t *meas,
 					   uint64_t loader_start,
-					   uint64_t ram_size,
 					   uint64_t initrd_start,
 					   const char *kernel_path,
 					   const char *initramfs_path,
@@ -325,7 +324,6 @@ void measure_load_data(cvm_init_measure_t *meas,
 
 	size_t bytes_read;
 	size_t addr =  round_down(loader_start, BLOCK_SIZE);
-	size_t addr_end = round_up(loader_start + ram_size, BLOCK_SIZE);
 	size_t kernel_start = loader_start + KERNEL_LOAD_OFFSET;
 	size_t dtb_start = round_up(initrd_start + initrd_size, BLOCK_SIZE);
 	tmi_data_create_params_t params;
@@ -516,74 +514,80 @@ void measure_create_cvm(cvm_init_measure_t *meas,
 }
 
 void generate_rim_reference(const char *kernel_path, const char *dtb_path,
-							const char *initramfs_path)
+                            const char *initramfs_path, uint64_t tec_num)
 {
-	bool lpa2_enable = false;
-	bool sve_enable = true;
-	bool pmu_enable = true;
-	uint64_t ipa_width = 40;
-	uint64_t sve_vector_length = 1;
-	uint64_t num_bps = 0;
-	uint64_t num_wps = 0;
-	uint64_t num_pmu = 1;
-	uint64_t hash_algo = 0;
-	uint64_t tec_num = 1;
-	uint64_t loader_start = LOADER_START_ADDR;
-	uint64_t ram_size = 1024 * MB;
-	uint64_t initrd_start = 128 * MB + loader_start;
+    bool lpa2_enable = false;
+    bool sve_enable = true;
+    bool pmu_enable = true;
+    uint64_t ipa_width = 40;
+    uint64_t sve_vector_length = 1;
+    uint64_t num_bps = 0;
+    uint64_t num_wps = 0;
+    uint64_t num_pmu = 1;
+    uint64_t hash_algo = 0;
+    uint64_t loader_start = LOADER_START_ADDR;
+    uint64_t initrd_start = 128 * MB + loader_start;
 
-	cvm_init_measure_t meas={0};
-	measure_create_cvm(&meas, lpa2_enable, sve_enable, pmu_enable,
-					   ipa_width, sve_vector_length, num_bps, num_wps,
-					   num_pmu, hash_algo);
-	measure_load_data(&meas, loader_start, ram_size, initrd_start,
-					  kernel_path, initramfs_path, dtb_path);
-	measure_create_tecs(&meas, loader_start, tec_num);
-	printf("RIM-");
-	print_hash(meas.rim, meas.measurement_algo);
+    cvm_init_measure_t meas = {0};
+    measure_create_cvm(&meas, lpa2_enable, sve_enable, pmu_enable,
+                       ipa_width, sve_vector_length, num_bps, num_wps,
+                       num_pmu, hash_algo);
+    measure_load_data(&meas, loader_start, initrd_start,
+                      kernel_path, initramfs_path, dtb_path);
+    measure_create_tecs(&meas, loader_start, tec_num);
+    printf("RIM-");
+    print_hash(meas.rim, meas.measurement_algo);
 }
 
 void print_help()
 {
     printf("Generate rim reference value:\n");
-    printf("  <kernel_path> <dtb_path> [<initramfs_path>] \n");
-	printf("        kernel_path:     path to kernel image\n");
+    printf("  <kernel_path> <dtb_path> [<initramfs_path>] <tec_num>\n");
+    printf("        kernel_path:     path to kernel image\n");
     printf("        dtb_path:        path to device tree dtb file\n");
-	printf("        initramfs_path:  path to initramfs gzip file\n");
+    printf("        initramfs_path:  path to initramfs gzip file (optional)\n");
+    printf("        tec_num:         Number of Vcpus (must be a positive integer)\n");
 }
 
 int main(int argc, char *argv[])
 {
-    int ret = 0;
-
-	/* Parse parameters based on inputted ini config file */
-
-    if (argc < 2) {
+    if (argc != 4 && argc != 5) {
         errno = EINVAL;
-        perror("Please input kernel path and dtb path");
+        perror("Invalid number of arguments");
         print_help();
         return -1;
     }
 
-	if (argc < 3) {
-        errno = EINVAL;
-        perror("Please input dtb path");
-        print_help();
-        return -1;
+    char kernel_path[1000];
+    char dtb_path[1000];
+    char initramfs_path[1000] = {0};
+    uint64_t tec_num;
+
+    strncpy(kernel_path, argv[1], sizeof(kernel_path) - 1);
+    kernel_path[sizeof(kernel_path) - 1] = '\0';
+    strncpy(dtb_path, argv[2], sizeof(dtb_path) - 1);
+    dtb_path[sizeof(dtb_path) - 1] = '\0';
+
+    if (argc == 4) {
+        tec_num = strtoull(argv[3], NULL, 10);
+        if (tec_num == 0) {
+            fprintf(stderr, "Invalid tec_num value: must be greater than 0\n");
+            print_help();
+            return -1;
+        }
+        generate_rim_reference(kernel_path, dtb_path, NULL, tec_num);
+    } else if (argc == 5) {
+        strncpy(initramfs_path, argv[3], sizeof(initramfs_path) - 1);
+        initramfs_path[sizeof(initramfs_path) - 1] = '\0';
+
+        tec_num = strtoull(argv[4], NULL, 10);
+        if (tec_num == 0) {
+            fprintf(stderr, "Invalid tec_num value: must be greater than 0\n");
+            print_help();
+            return -1;
+        }
+        generate_rim_reference(kernel_path, dtb_path, initramfs_path, tec_num);
     }
 
-	char kernel_path[1000];
-	char dtb_path[1000];
-	char initramfs_path[1000];
-	strncpy(kernel_path, argv[1], sizeof(kernel_path));
-	strncpy(dtb_path, argv[2], sizeof(dtb_path));
-	if (argc < 4) {
-		generate_rim_reference(kernel_path, dtb_path, NULL);
-	} else {
-		strncpy(initramfs_path, argv[3], sizeof(initramfs_path));
-		generate_rim_reference(kernel_path, dtb_path, initramfs_path);
-	}
-
-	return ret;
-
+    return 0;
 }
