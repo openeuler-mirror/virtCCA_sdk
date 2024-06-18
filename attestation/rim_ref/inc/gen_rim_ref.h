@@ -169,15 +169,13 @@ void measure_create_tecs(cvm_init_measure_t *meas,
 
 void measure_load_data(cvm_init_measure_t *meas,
 					   uint64_t loader_start,
-					   uint64_t ram_size,
 					   uint64_t initrd_start,
 					   const char *kernel_path,
 					   const char *ramdisk_path,
 					   const char *dtb_path);
 
 void generate_rim_reference(const char *kernel_path, const char *dtb_path,
-							const char *ramdisk_path);
-
+							const char *initramfs_path, uint64_t tec_num);
 void print_hash(unsigned char *measurement,
 			    const enum hash_algo algorithm);
 
