@@ -1,0 +1,252 @@
+From 81b7110ee1a730e773aff9a88753dc315b8cf425 Mon Sep 17 00:00:00 2001
+From: lishengjie <lishengjie12@huawei.com>
+Date: Tue, 18 Jun 2024 15:08:24 +0800
+Subject: [PATCH] verify file hash of IMA measurement
+
+---
+ samples/virtcca-client/ima_measure.c     | 48 ++++++++++++++++++------
+ samples/virtcca-client/inc/ima_measure.h |  4 +-
+ samples/virtcca-client/rats-client.c     | 26 ++++++++++++-
+ 3 files changed, 64 insertions(+), 14 deletions(-)
+
+diff --git a/samples/virtcca-client/ima_measure.c b/samples/virtcca-client/ima_measure.c
+index 3d08ff2..3c8bb3b 100644
+--- a/samples/virtcca-client/ima_measure.c
++++ b/samples/virtcca-client/ima_measure.c
+@@ -19,7 +19,7 @@ static u_int8_t zero[SHA_DIGEST_LENGTH];
+ static u_int8_t fox[SHA_DIGEST_LENGTH];
+ static u_int8_t extend[SHA256_DIGEST_LENGTH];
+ 
+-static int display_digest(u_int8_t * digest, u_int32_t digestlen)
++static int display_digest(u_int8_t *digest, u_int32_t digestlen)
+ {
+ 	int i;
+ 
+@@ -29,12 +29,12 @@ static int display_digest(u_int8_t * digest, u_int32_t digestlen)
+ 	return 0;
+ }
+ 
+-static int ima_eventdigest_parse(u_int8_t * buffer, u_int32_t buflen)
++static int ima_eventdigest_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
+ 	return display_digest(buffer, SHA_DIGEST_LENGTH);
+ }
+ 
+-static int ima_eventdigest_ng_parse(u_int8_t * buffer, u_int32_t buflen)
++static int ima_eventdigest_ng_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
+ 	char hash_algo[CRYPTO_MAX_ALG_NAME + 1] = { 0 };
+ 	int algo_len = strlen((char *)buffer) - 1; /* format: algo + ':' + '\0' */
+@@ -63,10 +63,17 @@ static int ima_eventdigest_ng_parse(u_int8_t * buffer, u_int32_t buflen)
+ 		return ERROR_ENTRY_PARSING;
+ 	}
+ 
++	if (digest_len > MAX_HASH_SIZE) {
++		printf("Hash digest too long.\n");
++		return ERROR_ENTRY_PARSING;
++	}
++	*file_digest_len = digest_len;
++	memcpy(file_digest, buffer + algo_len + 2, digest_len);
++
+ 	return display_digest(buffer + algo_len + 2, digest_len);
+ }
+ 
+-static int ima_parse_string(u_int8_t * buffer, u_int32_t buflen)
++static int ima_parse_string(u_int8_t *buffer, u_int32_t buflen)
+ {
+ 	char *str;
+ 
+@@ -85,7 +92,7 @@ static int ima_parse_string(u_int8_t * buffer, u_int32_t buflen)
+ 	return 0;
+ }
+ 
+-static int ima_eventname_parse(u_int8_t * buffer, u_int32_t buflen)
++static int ima_eventname_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
+ 	if (buflen > TCG_EVENT_NAME_LEN_MAX + 1) {
+ 		printf("Event name too long\n");
+@@ -95,12 +102,12 @@ static int ima_eventname_parse(u_int8_t * buffer, u_int32_t buflen)
+ 	return ima_parse_string(buffer, buflen);
+ }
+ 
+-static int ima_eventname_ng_parse(u_int8_t * buffer, u_int32_t buflen)
++static int ima_eventname_ng_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
+ 	return ima_parse_string(buffer, buflen);
+ }
+ 
+-static int ima_eventsig_parse(u_int8_t * buffer, u_int32_t buflen)
++static int ima_eventsig_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
+ 	return display_digest(buffer, buflen);
+ }
+@@ -108,7 +115,7 @@ static int ima_eventsig_parse(u_int8_t * buffer, u_int32_t buflen)
+ /* IMA template field definition */
+ struct ima_template_field {
+ 	const char field_id[IMA_TEMPLATE_FIELD_ID_MAX_LEN];
+-	int (*field_parse) (u_int8_t * buffer, u_int32_t buflen);
++	int (*field_parse) (u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len);
+ };
+ 
+ /* IMA template descriptor definition */
+@@ -143,6 +150,8 @@ struct event {
+ 	struct ima_template_desc *template_desc; /* template descriptor */
+ 	u_int32_t template_data_len;
+ 	u_int8_t *template_data;	/* template related data */
++	u_int8_t file_digest[MAX_HASH_SIZE];
++	u_int32_t file_digest_len;
+ };
+ 
+ static int parse_template_data(struct event *template)
+@@ -204,7 +213,7 @@ static int parse_template_data(struct event *template)
+ 			offset += sizeof(u_int32_t);
+ 		}
+ 		result = field->field_parse(template->template_data + offset,
+-					    field_len);
++					    field_len, template->file_digest, &template->file_digest_len);
+ 		if (result) {
+ 			printf("Parsing of '%s' field failed, result: %d\n",
+ 			       f, result);
+@@ -261,7 +270,7 @@ static int read_template_data(struct event *template, FILE *fp)
+ /*
+  * Calculate the sha1 hash of data
+  */
+-static void calc_digest(u_int8_t * digest, int len, void *data)
++static void calc_digest(u_int8_t *digest, int len, void *data)
+ {
+ 	SHA_CTX c;
+ 
+@@ -319,7 +328,7 @@ static int verify_template_hash(struct event *template)
+  * Return code: if verification enabled, returns number of verification
+  * 		errors.
+  */
+-int ima_measure(void *data, size_t datalen, int validate, int verify)
++int ima_measure(void *data, size_t datalen, char *digest_list_file, int validate, int verify)
+ {
+ 	int ret;
+ 	FILE *fp;
+@@ -357,6 +366,23 @@ int ima_measure(void *data, size_t datalen, int validate, int verify)
+ 			RTLS_ERR("Parsing of measurement entry failed\n");
+ 		}
+ 
++		char digest_hex[MAX_CMD_LEN * 2] = {0};
++		int i;
++		for (i = 0; i < template.file_digest_len; i++) {
++			sprintf(digest_hex + i * 2, "%02x", (*(template.file_digest + i) & 0xff));
++		}
++		char cmd_str[MAX_CMD_LEN] = {0};
++		if (template.file_digest_len * 2 + strlen("grep -E -i \"^$\"  > /dev/null") + strlen(digest_list_file) >= MAX_CMD_LEN) {
++			printf("Digest list file name too long.\n");
++			return 1;
++		}
++		sprintf(cmd_str, "grep -E -i \"^%s$\" %s > /dev/null", digest_hex, digest_list_file);
++		ret = system(cmd_str);
++		if (ret != 0) {
++			printf("Failed to verify file hash.\n");
++			return 1;
++		}
++
+ 		/* Calc template hash for an ima entry */
+ 		SHA256_CTX sha256_ctx;
+ 		u_int8_t digest[SHA256_DIGEST_LENGTH] = {0};
+diff --git a/samples/virtcca-client/inc/ima_measure.h b/samples/virtcca-client/inc/ima_measure.h
+index aeb5064..ad8bbdd 100644
+--- a/samples/virtcca-client/inc/ima_measure.h
++++ b/samples/virtcca-client/inc/ima_measure.h
+@@ -2,6 +2,8 @@
+ #define IMA_TEMPLATE_FIELD_ID_MAX_LEN	16
+ #define IMA_TEMPLATE_NUM_FIELDS_MAX	15
+ #define CRYPTO_MAX_ALG_NAME 64
++#define MAX_HASH_SIZE 64
++#define MAX_CMD_LEN 1024
+ 
+ #define IMA_TEMPLATE_IMA_NAME "ima"
+ #define IMA_TEMPLATE_IMA_FMT "d|n"
+@@ -14,4 +16,4 @@
+ #define IMA_MEASUREMENTS_PATH "binary_runtime_measurements"
+ 
+ 
+-int ima_measure(void *data, size_t datalen, int validate, int verify);
++int ima_measure(void *data, size_t datalen, char *digest_list_file, int validate, int verify);
+diff --git a/samples/virtcca-client/rats-client.c b/samples/virtcca-client/rats-client.c
+index 0588464..ccb8d35 100644
+--- a/samples/virtcca-client/rats-client.c
++++ b/samples/virtcca-client/rats-client.c
+@@ -31,6 +31,8 @@
+ 
+ static uint8_t rim_ref[MAX_MEASUREMENT_SIZE];
+ static size_t rim_ref_size = MAX_MEASUREMENT_SIZE;
++static uint8_t digest_list_file[PATH_MAX];
++static uint8_t digest_list_file_size = 0;
+ 
+ int user_callback(void *args)
+ {
+@@ -85,7 +87,11 @@ int user_callback(void *args)
+ 			fp = fopen(IMA_MEASUREMENTS_PATH, "w");
+ 			byte_write = fwrite(ev->custom_claims[i].value, ev->custom_claims[i].value_size, 1, fp);
+ 			fclose(fp);
+-			if (ima_measure((void *) token.cvm_token.rem[0].ptr, token.cvm_token.rem[0].len, validate, verify) != 0) {
++			if (digest_list_file_size == 0) {
++				printf("Missing digest list file for verifying IMA measurement.\n");
++				return false;
++			}
++			if (ima_measure((void *) token.cvm_token.rem[0].ptr, token.cvm_token.rem[0].len, digest_list_file, validate, verify) != 0) {
+ 				return false;
+ 			}
+ 		}
+@@ -202,7 +208,7 @@ err:
+ 
+ int main(int argc, char **argv)
+ {
+-	char *const short_options = "a:v:t:c:mel:i:p:r:h";
++	char *const short_options = "a:v:t:c:mel:i:p:r:d:h";
+ 	// clang-format off
+ 	struct option long_options[] = {
+ 		{ "attester", required_argument, NULL, 'a' },
+@@ -215,6 +221,7 @@ int main(int argc, char **argv)
+ 		{ "ip", required_argument, NULL, 'i' },
+ 		{ "port", required_argument, NULL, 'p' },
+ 		{ "rim", required_argument, NULL, 'r' },
++		{ "digest", required_argument, NULL, 'd' },
+ 		{ "help", no_argument, NULL, 'h' },
+ 		{ 0, 0, 0, 0 }
+ 	};
+@@ -230,6 +237,7 @@ int main(int argc, char **argv)
+ 	char *srv_ip = DEFAULT_IP;
+ 	int port = DEFAULT_PORT;
+ 	char *rim = "";
++	char *digest_file = "";
+ 	int opt;
+ 
+ 	do {
+@@ -279,6 +287,19 @@ int main(int argc, char **argv)
+ 				exit(1);
+ 			}
+ 			break;
++		case 'd':
++			digest_file = optarg;
++			digest_list_file_size = strlen(digest_file);
++			if (digest_list_file_size > PATH_MAX) {
++				printf("Digest list file too long.\n");
++				exit(1);
++			}
++			if (access(digest_file, F_OK) != 0) {
++				printf("Digest list file cannot be accessed.\n");
++				exit(1);
++			}
++			memcpy(digest_list_file, digest_file, digest_list_file_size);
++			break;
+ 		case -1:
+ 			break;
+ 		case 'h':
+@@ -295,6 +316,7 @@ int main(int argc, char **argv)
+ 			     "        --ip/-i               set the listening ip address\n"
+ 			     "        --port/-p             set the listening tcp port\n"
+ 			     "        --rim/-r              set the initial measurement of cVM\n"
++			     "        --digest/-d           set the digest list file for verifying IMA measurement\n"
+ 			     "        --help/-h             show the usage\n");
+ 			exit(1);
+ 		default:
+-- 
+2.38.1.windows.1
+
