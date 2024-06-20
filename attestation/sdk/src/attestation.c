@@ -76,16 +76,11 @@ int get_attestation_token(tsi_ctx *ctx, unsigned char *challenge, size_t challen
     }
 
     if (*token_len < user_cmd.token_size) {
-        printf("token too small.\n");
+        printf("Input token buf too small.\n");
         return INSUFFICIENT_BUFFER_LEN;
     }
-
-    read_len = read(ctx->fd, token, user_cmd.token_size);
-    if (read_len == EOF || read_len == 0 || read_len != user_cmd.token_size) {
-        printf("Failed to read token. errno: %d\n", errno);
-        return TSI_ERROR;
-    }
-    *token_len = read_len;
+    *token_len = user_cmd.token_size;
+    memcpy(token, user_cmd.token, user_cmd.token_size);
 
     return TSI_SUCCESS;
 }
