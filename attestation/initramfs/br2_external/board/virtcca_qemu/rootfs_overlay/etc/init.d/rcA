@@ -7,13 +7,17 @@ sleep 10
 ip a
 
 ip_addr=$(ip a | grep inet | grep -v inet6 | grep -v 127 | awk -F' ' '{print $2}' | awk -F'/' '{print $1}')
+if [ "$ip_addr" == "" ]; then
+    echo "Cannot not get ip addr."
+    exit 1
+fi
 echo "IP address: $ip_addr"
 
-server -i $ip_addr
+/usr/bin/virtcca-server -i $ip_addr
 exit_status=$?
 echo "server return $exit_status"
 
-if [ $exit_status -eq 0 ]; then
+if [ $exit_status -eq 103 ]; then
     # mount the new root
     echo "Mounting new root filesystem..."
     mkdir -p /newroot
