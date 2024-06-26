@@ -1,8 +1,8 @@
 # CMake version
-cmake_minimum_required(VERSION 3.5.1)
+cmake_minimum_required(VERSION 3.16)
 
 # Project
-project(gen_rim_ref)
+project(gen_rim_ref LANGUAGES C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
