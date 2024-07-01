@@ -1,0 +1,539 @@
+From 770c820e56a60a623ff27d12a533e4a8718c3d23 Mon Sep 17 00:00:00 2001
+From: chenzheng <chenzheng55@huawei.com>
+Date: Tue, 2 Jul 2024 14:52:43 +0800
+Subject: [PATCH] change IMA verify after TLS channel set up
+
+---
+ samples/virtcca-client/ima_measure.c        |   4 +-
+ samples/virtcca-client/inc/ima_measure.h    |   2 +-
+ samples/virtcca-client/inc/token_validate.h |   5 +-
+ samples/virtcca-client/rats-client.c        | 113 ++++++++++---
+ samples/virtcca-client/token_validate.c     |   3 +-
+ samples/virtcca-server/rats-server.c        | 166 ++++++++++++--------
+ src/include/rats-tls/verifier.h             |   2 +
+ src/verifiers/virtcca/cleanup.c             |   2 +
+ src/verifiers/virtcca/verify_evidence.c     |  15 ++
+ 9 files changed, 219 insertions(+), 93 deletions(-)
+
+diff --git a/samples/virtcca-client/ima_measure.c b/samples/virtcca-client/ima_measure.c
+index 3c8bb3b..bec95b4 100644
+--- a/samples/virtcca-client/ima_measure.c
++++ b/samples/virtcca-client/ima_measure.c
+@@ -63,7 +63,7 @@ static int ima_eventdigest_ng_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t
+ 		return ERROR_ENTRY_PARSING;
+ 	}
+ 
+-	if (digest_len > MAX_HASH_SIZE) {
++	if (digest_len > IMA_MAX_HASH_SIZE) {
+ 		printf("Hash digest too long.\n");
+ 		return ERROR_ENTRY_PARSING;
+ 	}
+@@ -150,7 +150,7 @@ struct event {
+ 	struct ima_template_desc *template_desc; /* template descriptor */
+ 	u_int32_t template_data_len;
+ 	u_int8_t *template_data;	/* template related data */
+-	u_int8_t file_digest[MAX_HASH_SIZE];
++	u_int8_t file_digest[IMA_MAX_HASH_SIZE];
+ 	u_int32_t file_digest_len;
+ };
+ 
+diff --git a/samples/virtcca-client/inc/ima_measure.h b/samples/virtcca-client/inc/ima_measure.h
+index ad8bbdd..a481850 100644
+--- a/samples/virtcca-client/inc/ima_measure.h
++++ b/samples/virtcca-client/inc/ima_measure.h
+@@ -2,7 +2,7 @@
+ #define IMA_TEMPLATE_FIELD_ID_MAX_LEN	16
+ #define IMA_TEMPLATE_NUM_FIELDS_MAX	15
+ #define CRYPTO_MAX_ALG_NAME 64
+-#define MAX_HASH_SIZE 64
++#define IMA_MAX_HASH_SIZE 64
+ #define MAX_CMD_LEN 1024
+ 
+ #define IMA_TEMPLATE_IMA_NAME "ima"
+diff --git a/samples/virtcca-client/inc/token_validate.h b/samples/virtcca-client/inc/token_validate.h
+index 890618f..6fdbf01 100644
+--- a/samples/virtcca-client/inc/token_validate.h
++++ b/samples/virtcca-client/inc/token_validate.h
+@@ -28,13 +28,10 @@ typedef struct {
+ 
+ bool validate_aik_cert_chain(X509 *x509_aik, X509 *x509_sub, X509 *x509_root);
+ 
+-bool verify_plat_cose_sign(qbuf_t signed_cose, X509 *x509_aik);
+-
+ bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key);
+ 
+ bool verify_cca_token_signatures(cert_info_t *cert_info,
+                                 qbuf_t cvm_cose,
+-                                qbuf_t cvm_pub_key,
+-                                qbuf_t cvm_pub_key_algo);
++                                qbuf_t cvm_pub_key);
+ 
+ #endif /* TOKEN_VALIDATE_H */
+diff --git a/samples/virtcca-client/rats-client.c b/samples/virtcca-client/rats-client.c
+index ccb8d35..e0a2891 100644
+--- a/samples/virtcca-client/rats-client.c
++++ b/samples/virtcca-client/rats-client.c
+@@ -13,6 +13,7 @@
+ #include <arpa/inet.h>
+ #include <netinet/in.h>
+ #include <unistd.h>
++#include <internal/core.h>
+ #include <rats-tls/api.h>
+ #include <rats-tls/log.h>
+ #include <rats-tls/claim.h>
+@@ -24,6 +25,7 @@
+ #define DEFAULT_PORT 1234
+ #define DEFAULT_IP   "127.0.0.1"
+ #define TOKEN "ATTESTATION_PASS"
++#define REQUEST_IMA_LOG "REQUEST_IMA_LOG"
+ 
+ #define SHA256_SIZE 32
+ #define SHA512_SIZE 64
+@@ -64,8 +66,7 @@ int user_callback(void *args)
+ 
+ 	ret = verify_cca_token_signatures(&cert_info,
+                                 token.cvm_cose,
+-                                token.cvm_token.pub_key,
+-                                token.cvm_token.pub_key_hash_algo_id);
++                                token.cvm_token.pub_key);
+ 	if (!ret) {
+         return false;
+     }
+@@ -76,28 +77,93 @@ int user_callback(void *args)
+ 		return false;
+     }
+ 
+-	printf("verify_callback called, claims %p, claims_size %zu, args %p\n", ev->custom_claims,
+-	       ev->custom_claims_length, args);
+-	for (size_t i = 0; i < ev->custom_claims_length; ++i) {
+-		printf("custom_claims[%zu] -> name: '%s' value_size: %zu value: '%.*s'\n", i,
+-		       ev->custom_claims[i].name, ev->custom_claims[i].value_size,
+-		       (int)ev->custom_claims[i].value_size, ev->custom_claims[i].value);
+-		ret = (strcmp(ev->custom_claims[i].name, "ima") == 0);
+-		if (ret) {
+-			fp = fopen(IMA_MEASUREMENTS_PATH, "w");
+-			byte_write = fwrite(ev->custom_claims[i].value, ev->custom_claims[i].value_size, 1, fp);
+-			fclose(fp);
+-			if (digest_list_file_size == 0) {
+-				printf("Missing digest list file for verifying IMA measurement.\n");
+-				return false;
+-			}
+-			if (ima_measure((void *) token.cvm_token.rem[0].ptr, token.cvm_token.rem[0].len, digest_list_file, validate, verify) != 0) {
+-				return false;
+-			}
++	return true;
++}
++
++static int verify_ima_log(rats_tls_handle handle)
++{
++	size_t len = sizeof(size_t);
++	size_t ima_log_size = 0;
++	uint8_t *ima_log_buf = NULL;
++	size_t recv_size = 0;
++	FILE *fp = NULL;
++	int ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
++
++	RTLS_INFO("Start verify IMA measurement....\n");
++	// get IMA log size and data
++	ret = rats_tls_receive(handle, &ima_log_size, &len);
++	if (ret != RATS_TLS_ERR_NONE || len != sizeof(size_t)) {
++		RTLS_INFO("Failed to receive IMA log size %#x\n", ret);
++		return RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++	}
++	if (ima_log_size == 0) {
++		RTLS_INFO("IMA log size is zero.\n");
++		return RATS_TLS_ERR_LOAD_ENCLAVE_ATTESTERS;
++	}
++
++	ima_log_buf = malloc(ima_log_size);
++	if (ima_log_buf == NULL) {
++		RTLS_INFO("Malloc IMA log buffer failed.\n");
++		return ENCLAVE_VERIFIER_ERR_NO_MEM;
++	}
++
++	while (recv_size < ima_log_size) {
++		len = ima_log_size - recv_size;
++		ret = rats_tls_receive(handle, ima_log_buf + recv_size, &len);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_INFO("Filed to receive IMA log data.\n");
++			goto free;
+ 		}
++		recv_size += len;
+ 	}
+ 
+-	return true;
++	// write IMA log to file for next verify
++	if ((fp = fopen(IMA_MEASUREMENTS_PATH, "w")) == NULL) {
++		RTLS_INFO("Filed to open file %s.\n", IMA_MEASUREMENTS_PATH);
++		ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
++		goto free;
++	}
++	if ((len = fwrite(ima_log_buf, ima_log_size, 1, fp)) != 1) {
++		RTLS_INFO("Filed to write IMA log to file.\n");
++		ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
++	}
++
++close:
++	fclose(fp);
++free:
++	free(ima_log_buf);
++	if (ret)
++		return ret;
++
++	rtls_core_context_t *ctx = (rtls_core_context_t *)handle;
++	ret = ima_measure(ctx->verifier->config.virtcca.ima_log_hash, \
++		ctx->verifier->config.virtcca.ima_log_hash_len, digest_list_file, 1, 1);
++	if (ret) {
++		RTLS_INFO("Filed to verify IMA measurement.\n");
++		ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
++	}
++	return ret;
++}
++
++static int deal_ima(rats_tls_handle handle)
++{
++	int ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
++
++	RTLS_DEBUG("IMA file hash patch len %d\n", digest_list_file_size);
++	if (digest_list_file_size == 0) {
++		RTLS_INFO("No need to request and verify IMA log.\n");
++		return RATS_TLS_ERR_BASE;
++	}
++	const char *msg = REQUEST_IMA_LOG;
++	size_t len = strlen(msg);
++	ret = rats_tls_transmit(handle, (void *)msg, &len);
++	if (ret != RATS_TLS_ERR_NONE || len != strlen(msg)) {
++		RTLS_ERR("Failed to request IMA log %#x\n", ret);
++		return RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++	}
++
++	ret = verify_ima_log(handle);
++	return ret;
+ }
+ 
+ int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
+@@ -164,6 +230,11 @@ int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 		goto err;
+ 	}
+ 
++	if ((ret = deal_ima(handle)) != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Verify IMA measurement failed %#x\n", ret);
++		goto err;
++	}
++
+ 	const char *msg = TOKEN;
+ 
+ 	size_t len = strlen(msg);
+diff --git a/samples/virtcca-client/token_validate.c b/samples/virtcca-client/token_validate.c
+index 219af82..964ee42 100644
+--- a/samples/virtcca-client/token_validate.c
++++ b/samples/virtcca-client/token_validate.c
+@@ -238,8 +238,7 @@ bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key)
+ 
+ bool verify_cca_token_signatures(cert_info_t *cert_info,
+                                 qbuf_t cvm_cose,
+-                                qbuf_t cvm_pub_key,
+-                                qbuf_t cvm_pub_key_algo)
++                                qbuf_t cvm_pub_key)
+ {
+     X509 *x509_root = X509_new();
+     X509 *x509_sub = X509_new();
+diff --git a/samples/virtcca-server/rats-server.c b/samples/virtcca-server/rats-server.c
+index e48723c..8bd7388 100644
+--- a/samples/virtcca-server/rats-server.c
++++ b/samples/virtcca-server/rats-server.c
+@@ -22,6 +22,7 @@
+ #define DEFAULT_PORT 1234
+ #define DEFAULT_IP   "0.0.0.0" /* Listern to connections from any ip */
+ #define TOKEN "ATTESTATION_PASS"
++#define REQUEST_IMA_LOG "REQUEST_IMA_LOG"
+ #define IMA_MEASUREMENTS_PATH "/sys/kernel/security/ima/binary_runtime_measurements"
+ #define IMA_READ_BLCOK_SIZE 1024
+ 
+@@ -55,16 +56,103 @@ rats_tls_err_t read_ima_measurements(uint8_t **value, size_t *size)
+ 	return RATS_TLS_ERR_NONE;
+ }
+ 
++int send_ima_log(rats_tls_handle handle)
++{
++	uint8_t *ima_meas_buf = NULL;
++	size_t ima_size = 0;
++	size_t send_size = 0;
++	size_t len = sizeof(size_t);
++	int ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++
++	ret = read_ima_measurements(&ima_meas_buf, &ima_size);
++	if (ret == 0 && ima_size != 0) {
++		RTLS_INFO("Read %zu bytes from binary_runtime_measurements\n", ima_size);
++	} else {
++		RTLS_ERR("Failed to read binary_runtime_measurements\n");
++		return ret;
++	}
++
++	ret = rats_tls_transmit(handle, &ima_size, &len);
++	if (ret != RATS_TLS_ERR_NONE || len != sizeof(size_t)) {
++		RTLS_ERR("Failed to send IMA log size %#x\n", ret);
++		ret = RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++		goto free;
++	}
++
++	while (send_size < ima_size) {
++		len = ima_size - send_size;
++		ret = rats_tls_transmit(handle, ima_meas_buf + send_size, &len);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to send IMA log data %#x\n", ret);
++			goto free;
++		}
++		send_size += len;
++	}
++
++free:
++	free(ima_meas_buf);
++	return ret;
++}
++
++int deal_client_req(rats_tls_handle handle)
++{
++	int ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++	char buf[256] = {0};
++	size_t len = sizeof(buf);
++
++	ret = rats_tls_receive(handle, buf, &len);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to receive %#x\n", ret);
++		return ret;
++	}
++
++	if (len >= sizeof(buf))
++		len = sizeof(buf) - 1;
++	buf[len] = '\0';
++
++	RTLS_INFO("Received from Client: %s\n", buf);
++
++	if (strncmp(buf, TOKEN, strlen(TOKEN)) == 0) {
++		/* do custome operation here.
++		 * then return success for other jobs, eg. switch rootfs.
++		 */
++		strcpy(buf, "Attestation Passed, Swtiching Root.....");
++		/* Reply back to the client */
++		len = sizeof(buf);
++		ret = rats_tls_transmit(handle, buf, &len);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to transmit %#x\n", ret);
++		}
++		ret = RATS_TLS_ERR_NONE;
++	} else if (strncmp(buf, REQUEST_IMA_LOG, strlen(REQUEST_IMA_LOG)) == 0) {
++		ret = send_ima_log(handle);
++		if (ret) {
++			RTLS_ERR("Send IMA log failed %#x\n", ret);
++		} else {
++			RTLS_INFO("Send IMA log success\n");
++			/* expect receive the PASS TOKEN */
++			ret = deal_client_req(handle);
++		}
++	} else {
++		strcpy(buf, "Attestation Failed, Continue.....");
++		/* Reply back to the client */
++		len = sizeof(buf);
++		ret = rats_tls_transmit(handle, buf, &len);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to transmit %#x\n", ret);
++		}
++		ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++	}
++
++	return ret;
++}
++
+ int rats_tls_server_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 			    char *verifier_type, char *tls_type, char *crypto_type, bool mutual,
+-				bool ima, bool provide_endorsements, char *ip, int port)
++				bool provide_endorsements, char *ip, int port)
+ {
+ 	rats_tls_conf_t conf;
+ 	rats_tls_err_t ret;
+-	uint8_t *ima_meas = NULL;
+-	size_t ima_size = 0;
+-    char pass_token[] = TOKEN;
+-    int pass_token_len = sizeof(pass_token);
+ 	memset(&conf, 0, sizeof(conf));
+ 	conf.log_level = log_level;
+ 	strcpy(conf.attester_type, attester_type);
+@@ -76,19 +164,7 @@ int rats_tls_server_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 	conf.flags |= RATS_TLS_CONF_FLAGS_SERVER;
+ 	if (mutual)
+ 		conf.flags |= RATS_TLS_CONF_FLAGS_MUTUAL;
+-	if (ima)
+-		ret = read_ima_measurements(&ima_meas, &ima_size);
+-		if (ret == 0 && ima_size != 0) {
+-			RTLS_INFO("read %zu bytes from binary_runtime_measurements\n", ima_size);
+-			claim_t custom_claims[1] = {
+-				{ .name = "ima", .value = ima_meas, .value_size = ima_size }
+-			};
+-			conf.custom_claims = (claim_t *)custom_claims;
+-			conf.custom_claims_length = 1;
+-			RTLS_INFO("Step\n");
+-		} else {
+-			RTLS_ERR("failed to read binary_runtime_measurements\n");
+-		}
++
+ 	if (provide_endorsements)
+ 		conf.flags |= RATS_TLS_CONF_FLAGS_PROVIDE_ENDORSEMENTS;
+ 
+@@ -177,52 +253,21 @@ int rats_tls_server_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 		ret = rats_tls_negotiate(handle, connd);
+ 		if (ret != RATS_TLS_ERR_NONE) {
+ 			RTLS_ERR("Failed to negotiate %#x\n", ret);
+-			continue;
++			goto close_connd;
+ 		}
+ 
+ 		RTLS_DEBUG("Client connected successfully\n");
+-
+-		char buf[1024];
+-		size_t len = sizeof(buf);
+-		ret = rats_tls_receive(handle, buf, &len);
+-		if (ret != RATS_TLS_ERR_NONE) {
+-			RTLS_ERR("Failed to receive %#x\n", ret);
+-			continue;
++		if ((ret = deal_client_req(handle))) {
++			RTLS_ERR("Client verify failed %#x\n", ret);
++		} else {
++			RTLS_INFO("Client verify success, do other jobs.\n");
++			break;
+ 		}
+ 
+-		if (len >= sizeof(buf))
+-			len = sizeof(buf) - 1;
+-		buf[len] = '\0';
+-
+-		RTLS_INFO("Received from Client: %s\n", buf);
+-
+-        if (strncmp(buf, pass_token, pass_token_len) == 0) {
+-            strcpy(buf, "Attestation Passed, Swtiching Root.....");
+-            /* Reply back to the client */
+-			len = sizeof(buf);
+-            ret = rats_tls_transmit(handle, buf, &len);
+-            if (ret != RATS_TLS_ERR_NONE) {
+-                RTLS_ERR("Failed to transmit %#x\n", ret);
+-            }
+-            break;
+-        } else {
+-            strcpy(buf, "Attestation Failed, Continue.....");
+-            /* Reply back to the client */
+-			len = sizeof(buf);
+-            ret = rats_tls_transmit(handle, buf, &len);
+-            if (ret != RATS_TLS_ERR_NONE) {
+-                RTLS_ERR("Failed to transmit %#x\n", ret);
+-            }
+-			continue;
+-        }
+-
++close_connd:
+ 		close(connd);
+ 	}
+ 
+-	if (ima_meas != NULL) {
+-		free(ima_meas);
+-	}
+-
+ 	shutdown(sockfd, SHUT_RDWR);
+ 	close(sockfd);
+ 	ret = rats_tls_cleanup(handle);
+@@ -244,7 +289,7 @@ err:
+ 
+ int main(int argc, char **argv)
+ {
+-	char *const short_options = "a:v:t:c:mIel:i:p:h";
++	char *const short_options = "a:v:t:c:mel:i:p:h";
+ 	// clang-format off
+         struct option long_options[] = {
+                 { "attester", required_argument, NULL, 'a' },
+@@ -252,7 +297,6 @@ int main(int argc, char **argv)
+                 { "tls", required_argument, NULL, 't' },
+                 { "crypto", required_argument, NULL, 'c' },
+                 { "mutual", no_argument, NULL, 'm' },
+-				{ "ima", no_argument, NULL, 'I'},
+                 { "endorsements", no_argument, NULL, 'e' },
+                 { "log-level", required_argument, NULL, 'l' },
+                 { "ip", required_argument, NULL, 'i' },
+@@ -267,7 +311,6 @@ int main(int argc, char **argv)
+ 	char *tls_type = "";
+ 	char *crypto_type = "";
+ 	bool mutual = false;
+-	bool ima = false;
+ 	bool provide_endorsements = false;
+ 	rats_tls_log_level_t log_level = RATS_TLS_LOG_LEVEL_INFO;
+ 	char *ip = DEFAULT_IP;
+@@ -292,9 +335,6 @@ int main(int argc, char **argv)
+ 		case 'm':
+ 			mutual = true;
+ 			break;
+-		case 'I':
+-			ima = true;
+-			break;
+ 		case 'e':
+ 			provide_endorsements = true;
+ 			break;
+@@ -346,5 +386,5 @@ int main(int argc, char **argv)
+ 	global_log_level = log_level;
+ 
+ 	return rats_tls_server_startup(log_level, attester_type, verifier_type, tls_type,
+-				       crypto_type, mutual, ima, provide_endorsements, ip, port);
++				       crypto_type, mutual, provide_endorsements, ip, port);
+ }
+diff --git a/src/include/rats-tls/verifier.h b/src/include/rats-tls/verifier.h
+index 4041841..59f8fa0 100644
+--- a/src/include/rats-tls/verifier.h
++++ b/src/include/rats-tls/verifier.h
+@@ -77,6 +77,8 @@ struct enclave_verifier_ctx {
+ 		struct {
+ 			const char name[ENCLAVE_VERIFIER_TYPE_NAME_SIZE];
+ 			// FixMe: add here
++			uint8_t *ima_log_hash;
++			uint32_t ima_log_hash_len;
+ 		} virtcca;
+ 	} config;
+ };
+diff --git a/src/verifiers/virtcca/cleanup.c b/src/verifiers/virtcca/cleanup.c
+index ea0f34f..9e54636 100644
+--- a/src/verifiers/virtcca/cleanup.c
++++ b/src/verifiers/virtcca/cleanup.c
+@@ -15,6 +15,8 @@ enclave_verifier_err_t virtcca_verifier_cleanup(enclave_verifier_ctx_t *ctx)
+ 	cca_token_t *virtcca_token = (cca_token_t *)ctx->verifier_private;
+ 
+ 	free(virtcca_token);
++	if (ctx->config.virtcca.ima_log_hash)
++		free(ctx->config.virtcca.ima_log_hash);
+ 
+ 	return ENCLAVE_VERIFIER_ERR_NONE;
+ }
+diff --git a/src/verifiers/virtcca/verify_evidence.c b/src/verifiers/virtcca/verify_evidence.c
+index 4287ce2..3d444d6 100644
+--- a/src/verifiers/virtcca/verify_evidence.c
++++ b/src/verifiers/virtcca/verify_evidence.c
+@@ -60,5 +60,20 @@ enclave_verifier_err_t virtcca_verify_evidence(enclave_verifier_ctx_t *ctx,
+ 
+     free(device_cert_data);
+ 
++    // copy ima log hash
++    if (virtcca_token.cvm_token.rem[0].len) {
++        uint8_t *buf = malloc(virtcca_token.cvm_token.rem[0].len);
++        if (buf == NULL) {
++            RTLS_ERR("Malloc IMA log hash buffer failed\n");
++            return ENCLAVE_VERIFIER_ERR_NO_MEM;
++        }
++        memcpy(buf, virtcca_token.cvm_token.rem[0].ptr, virtcca_token.cvm_token.rem[0].len);
++        ctx->config.virtcca.ima_log_hash = buf;
++        ctx->config.virtcca.ima_log_hash_len = virtcca_token.cvm_token.rem[0].len;
++    } else {
++        ctx->config.virtcca.ima_log_hash = NULL;
++        ctx->config.virtcca.ima_log_hash_len = 0;
++    }
++
+ 	return ENCLAVE_VERIFIER_ERR_NONE;
+ }
+\ No newline at end of file
+-- 
+2.31.1.windows.1
+

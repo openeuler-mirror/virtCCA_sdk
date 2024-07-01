@@ -226,8 +226,7 @@ bool verify_cvm_cose_sign(qbuf_t signed_cose, qbuf_t pub_key)
 
 bool verify_cca_token_signatures(cert_info_t *cert_info,
                                 qbuf_t cvm_cose,
-                                qbuf_t cvm_pub_key,
-                                qbuf_t cvm_pub_key_algo)
+                                qbuf_t cvm_pub_key)
 {
     X509 *x509_root = X509_new();
     X509 *x509_sub = X509_new();
