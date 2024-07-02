@@ -59,8 +59,7 @@ int verify_token(unsigned char *token, size_t token_len)
 
     ret = verify_cca_token_signatures(&cert_info,
                                 cca_token.cvm_cose,
-                                cca_token.cvm_token.pub_key,
-                                cca_token.cvm_token.pub_key_hash_algo_id);
+                                cca_token.cvm_token.pub_key);
     if (!ret) {
         return VERIFY_FAILED;
     }
