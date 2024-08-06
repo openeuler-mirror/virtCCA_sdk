@@ -17,21 +17,26 @@ echo "IP address: $ip_addr"
 exit_status=$?
 echo "server return $exit_status"
 
-if [ $exit_status -eq 103 ]; then
-    # mount the new root
-    echo "Mounting new root filesystem..."
+if [ $exit_status -eq 104 ]; then
+
+    echo "Mounting new root filesystem to /dev/mapper/encryptfs ..."
+    mkdir -p /newroot
+    mount /dev/mapper/encryptfs /newroot
+elif [ $exit_status -eq 103 ]; then
+
+    echo "Mounting new root filesystem to /dev/vda ..."
     mkdir -p /newroot
     mount /dev/vda /newroot
-
-    if [ $? -ne 0 ]; then
-        echo "Failed to mount new root filesystem."
-        exit 1
-    fi
-
-    exec switch_root /newroot /sbin/init
-    echo "Failed to switch root!"
-    exit 1
 else
-    echo "Go to panic..."
+    echo "Other errors, go to panic...."
     exit 1
 fi
+
+if [ $? -ne 0 ]; then
+    echo "Failed to mount new root filesystem."
+    exit 1
+fi
+
+exec switch_root /newroot /sbin/init
+echo "Failed to switch root!"
+exit 0

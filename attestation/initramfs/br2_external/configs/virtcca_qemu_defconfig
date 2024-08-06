@@ -55,3 +55,6 @@ BR2_PACKAGE_HAS_OPENSSL=y
 BR2_PACKAGE_PROVIDES_OPENSSL="libopenssl"
 BR2_PACKAGE_PROVIDES_HOST_OPENSSL="host-libopenssl"
 BR2_PACKAGE_WOLFSSL_ASM_SUPPORTS=y
+
+# cryptsetup for using dm-crypt with LUCKS for disk encryption
+BR2_PACKAGE_CRYPTSETUP=y
