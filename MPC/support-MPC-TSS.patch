@@ -1,4 +1,4 @@
-From 9afa48b411bf58075d7a1edf6af5611c61d78131 Mon Sep 17 00:00:00 2001
+From 0e0b13cd3b5bc0632efeb98cd352bf295f5a8711 Mon Sep 17 00:00:00 2001
 From: 18523959662 <luoshenghang@huawei.com>
 Date: Thu, 29 Aug 2024 07:10:10 +0000
 Subject: [PATCH] support MPC TSS
@@ -7,10 +7,10 @@ Subject: [PATCH] support MPC TSS
  libspu/core/encoding.cc   |  2 +-
  libspu/mpc/BUILD.bazel    |  7 +++++++
  libspu/mpc/factory.cc     |  8 ++++++++
- libspu/mpc/tss/io.h       | 19 +++++++++++++++++++
+ libspu/mpc/tss/io.h       | 20 ++++++++++++++++++++
  libspu/mpc/tss/protocol.h | 18 ++++++++++++++++++
  libspu/spu.proto          |  3 +++
- 6 files changed, 56 insertions(+), 1 deletion(-)
+ 6 files changed, 57 insertions(+), 1 deletion(-)
  create mode 100644 libspu/mpc/tss/io.h
  create mode 100644 libspu/mpc/tss/protocol.h
 
@@ -87,10 +87,10 @@ index 5ee0c69..b5baff4 100644
      }
 diff --git a/libspu/mpc/tss/io.h b/libspu/mpc/tss/io.h
 new file mode 100644
-index 0000000..1c5ef15
+index 0000000..6aad2e8
 --- /dev/null
 +++ b/libspu/mpc/tss/io.h
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,20 @@
 +/*
 + * Copyright (c) Huawei Technologies Co., Ltd. 2023-2024. All rights reserved.
 + */
@@ -103,6 +103,7 @@ index 0000000..1c5ef15
 +namespace spu::mpc::tss {
 +class TssIo final : public semi2k::Semi2kIo {
 +public:
++    TssIo(FieldType field, size_t npc);
 +    std::vector<NdArrayRef> toShares(const NdArrayRef &raw, Visibility vis, int owner_rank) const override;
 +};
 +
