@@ -1,18 +1,54 @@
-From 214f705a1a5acb148f0e3746032f8a25bf132068 Mon Sep 17 00:00:00 2001
-From: XiaoFeng Ma <maxiaofeng14@h-partners.com>
-Date: Mon, 12 Aug 2024 17:16:16 +0800
-Subject: [PATCH] adapt for cvm
+From 3b5320473bc543eceef163325dbda5d26e9239f3 Mon Sep 17 00:00:00 2001
+From: panhengchang <panhengchang@huawei.com>
+Date: Wed, 25 Sep 2024 11:31:02 +0800
+Subject: [PATCH] kata
 
 ---
- src/agent/Makefile                       |  2 +-
- src/agent/rustjail/src/mount.rs          |  3 +
- src/runtime/pkg/govmm/qemu/qemu.go       | 84 ++++++++++--------------
- src/runtime/pkg/katautils/create.go      |  6 +-
- src/runtime/virtcontainers/hypervisor.go |  2 +-
- src/runtime/virtcontainers/qemu.go       |  1 -
- src/runtime/virtcontainers/qemu_arm64.go | 10 ++-
- 7 files changed, 49 insertions(+), 59 deletions(-)
+ src/agent/Cargo.lock                     |   2 -
+ src/agent/Cargo.toml                     |   2 +-
+ src/agent/Makefile                       |   2 +-
+ src/agent/rustjail/src/mount.rs          |   3 +
+ src/runtime/pkg/govmm/qemu/qemu.go       | 135 +++++++++++++++--------
+ src/runtime/pkg/katautils/create.go      |   6 +-
+ src/runtime/virtcontainers/hypervisor.go |   2 +-
+ src/runtime/virtcontainers/qemu.go       |   1 -
+ src/runtime/virtcontainers/qemu_arm64.go |  10 +-
+ src/runtime/virtcontainers/virtiofsd.go  |   9 +-
+ 10 files changed, 114 insertions(+), 58 deletions(-)
 
+diff --git a/src/agent/Cargo.lock b/src/agent/Cargo.lock
+index 4a87c6a2f..341f0e7b2 100644
+--- a/src/agent/Cargo.lock
++++ b/src/agent/Cargo.lock
+@@ -2015,7 +2015,6 @@ dependencies = [
+ [[package]]
+ name = "image-rs"
+ version = "0.1.0"
+-source = "git+https://github.com/confidential-containers/guest-components?tag=v0.8.0#e849dc8921d2a48bec915f1a7c02f8988721022d"
+ dependencies = [
+  "anyhow",
+  "async-compression",
+@@ -2921,7 +2920,6 @@ dependencies = [
+ [[package]]
+ name = "ocicrypt-rs"
+ version = "0.1.0"
+-source = "git+https://github.com/confidential-containers/guest-components?tag=v0.8.0#e849dc8921d2a48bec915f1a7c02f8988721022d"
+ dependencies = [
+  "aes 0.8.3",
+  "anyhow",
+diff --git a/src/agent/Cargo.toml b/src/agent/Cargo.toml
+index ad57a770c..3f68360ba 100644
+--- a/src/agent/Cargo.toml
++++ b/src/agent/Cargo.toml
+@@ -74,7 +74,7 @@ clap = { version = "3.0.1", features = ["derive"] }
+ openssl = { version = "0.10.38", features = ["vendored"] }
+ 
+ # Image pull/decrypt
+-image-rs = { git = "https://github.com/confidential-containers/guest-components", tag = "v0.8.0", default-features = false, features = [
++image-rs = { path = "../../../guest-components/image-rs", default-features = false, features = [
+     "kata-cc-native-tls",
+     "verity",
+     "signature-simple-xrss",
 diff --git a/src/agent/Makefile b/src/agent/Makefile
 index a3eb56705..969548f9a 100644
 --- a/src/agent/Makefile
@@ -41,7 +77,7 @@ index b822736dc..3c16f0fb9 100644
          } else {
              if m.destination == "/dev" {
 diff --git a/src/runtime/pkg/govmm/qemu/qemu.go b/src/runtime/pkg/govmm/qemu/qemu.go
-index 5b618eb01..1470a3533 100644
+index 5b618eb01..a5a196c67 100644
 --- a/src/runtime/pkg/govmm/qemu/qemu.go
 +++ b/src/runtime/pkg/govmm/qemu/qemu.go
 @@ -584,6 +584,8 @@ func (fsdev FSDevice) QemuParams(config *Config) []string {
@@ -89,7 +125,18 @@ index 5b618eb01..1470a3533 100644
  	qemuParams = append(qemuParams, strings.Join(deviceParams, ","))
  
  	qemuParams = append(qemuParams, "-drive")
-@@ -1724,8 +1732,6 @@ func (b PCIeRootPortDevice) QemuParams(config *Config) []string {
+@@ -1581,6 +1589,10 @@ func (vhostuserDev VhostUserDevice) QemuFSParams(config *Config) []string {
+ 		deviceParams = append(deviceParams, fmt.Sprintf("romfile=%s", vhostuserDev.ROMFile))
+ 	}
+ 
++	if driver == "vhost-user-fs-pci" {
++		deviceParams = append(deviceParams, "iommu_platform=on")
++	}
++
+ 	qemuParams = append(qemuParams, "-device")
+ 	qemuParams = append(qemuParams, strings.Join(deviceParams, ","))
+ 
+@@ -1724,8 +1736,6 @@ func (b PCIeRootPortDevice) QemuParams(config *Config) []string {
  		deviceParams = append(deviceParams, fmt.Sprintf("romfile=%s", b.ROMFile))
  	}
  
@@ -98,7 +145,7 @@ index 5b618eb01..1470a3533 100644
  	return qemuParams
  }
  
-@@ -2007,6 +2013,9 @@ func (scsiCon SCSIController) QemuParams(config *Config) []string {
+@@ -2007,6 +2017,9 @@ func (scsiCon SCSIController) QemuParams(config *Config) []string {
  	}
  
  	qemuParams = append(qemuParams, "-device")
@@ -108,7 +155,7 @@ index 5b618eb01..1470a3533 100644
  	qemuParams = append(qemuParams, strings.Join(deviceParams, ","))
  
  	return qemuParams
-@@ -2125,9 +2134,6 @@ func (bridgeDev BridgeDevice) QemuParams(config *Config) []string {
+@@ -2125,9 +2138,6 @@ func (bridgeDev BridgeDevice) QemuParams(config *Config) []string {
  		deviceParams = append(deviceParams, fmt.Sprintf("pref64-reserve=%s", bridgeDev.Pref64Reserve))
  	}
  
@@ -118,7 +165,7 @@ index 5b618eb01..1470a3533 100644
  	return qemuParams
  }
  
-@@ -2213,6 +2219,9 @@ func (vsock VSOCKDevice) QemuParams(config *Config) []string {
+@@ -2213,6 +2223,9 @@ func (vsock VSOCKDevice) QemuParams(config *Config) []string {
  	}
  
  	qemuParams = append(qemuParams, "-device")
@@ -128,7 +175,7 @@ index 5b618eb01..1470a3533 100644
  	qemuParams = append(qemuParams, strings.Join(deviceParams, ","))
  
  	return qemuParams
-@@ -2272,7 +2281,8 @@ func (v RngDevice) QemuParams(config *Config) []string {
+@@ -2272,7 +2285,8 @@ func (v RngDevice) QemuParams(config *Config) []string {
  	objectParams = append(objectParams, "rng-random")
  	objectParams = append(objectParams, "id="+v.ID)
  
@@ -138,7 +185,7 @@ index 5b618eb01..1470a3533 100644
  	deviceParams = append(deviceParams, "rng="+v.ID)
  
  	if v.Transport.isVirtioPCI(config) && v.ROMFile != "" {
-@@ -2302,6 +2312,9 @@ func (v RngDevice) QemuParams(config *Config) []string {
+@@ -2302,6 +2316,9 @@ func (v RngDevice) QemuParams(config *Config) []string {
  	qemuParams = append(qemuParams, strings.Join(objectParams, ","))
  
  	qemuParams = append(qemuParams, "-device")
@@ -148,16 +195,17 @@ index 5b618eb01..1470a3533 100644
  	qemuParams = append(qemuParams, strings.Join(deviceParams, ","))
  
  	return qemuParams
-@@ -2854,6 +2867,8 @@ func (config *Config) appendMachine() {
+@@ -2854,6 +2871,9 @@ func (config *Config) appendMachine() {
  			machineParams = append(machineParams, config.Machine.Options)
  		}
  
 +		machineParams = append(machineParams, "kvm-type=cvm")
++		machineParams = append(machineParams, "kata-affinity=on")
 +
  		config.qemuParams = append(config.qemuParams, "-machine")
  		config.qemuParams = append(config.qemuParams, strings.Join(machineParams, ","))
  	}
-@@ -2862,7 +2877,7 @@ func (config *Config) appendMachine() {
+@@ -2862,7 +2882,7 @@ func (config *Config) appendMachine() {
  func (config *Config) appendCPUModel() {
  	if config.CPUModel != "" {
  		config.qemuParams = append(config.qemuParams, "-cpu")
@@ -166,7 +214,7 @@ index 5b618eb01..1470a3533 100644
  	}
  }
  
-@@ -2923,14 +2938,6 @@ func (config *Config) appendMemory() {
+@@ -2923,44 +2943,21 @@ func (config *Config) appendMemory() {
  
  		memoryParams = append(memoryParams, config.Memory.Size)
  
@@ -181,10 +229,18 @@ index 5b618eb01..1470a3533 100644
  		config.qemuParams = append(config.qemuParams, "-m")
  		config.qemuParams = append(config.qemuParams, strings.Join(memoryParams, ","))
  	}
-@@ -2942,26 +2949,6 @@ func (config *Config) appendCPUs() error {
+ }
+ 
++var (
++	smp_cpu int
++)
++
+ func (config *Config) appendCPUs() error {
+ 	if config.SMP.CPUs > 0 {
+ 		var SMPParams []string
  
  		SMPParams = append(SMPParams, fmt.Sprintf("%d", config.SMP.CPUs))
- 
+-
 -		if config.SMP.Cores > 0 {
 -			SMPParams = append(SMPParams, fmt.Sprintf("cores=%d", config.SMP.Cores))
 -		}
@@ -204,28 +260,11 @@ index 5b618eb01..1470a3533 100644
 -			}
 -			SMPParams = append(SMPParams, fmt.Sprintf("maxcpus=%d", config.SMP.MaxCPUs))
 -		}
--
++		smp_cpu = int(config.SMP.CPUs)
+ 
  		config.qemuParams = append(config.qemuParams, "-smp")
  		config.qemuParams = append(config.qemuParams, strings.Join(SMPParams, ","))
- 	}
-@@ -3054,13 +3041,9 @@ func (config *Config) appendMemoryKnobs() {
- 	config.qemuParams = append(config.qemuParams, "-object")
- 	config.qemuParams = append(config.qemuParams, objMemParam)
- 
--	if isDimmSupported(config) {
--		config.qemuParams = append(config.qemuParams, "-numa")
--		config.qemuParams = append(config.qemuParams, numaMemParam)
--	} else {
--		config.qemuParams = append(config.qemuParams, "-machine")
--		config.qemuParams = append(config.qemuParams, "memory-backend="+dimmName)
--	}
-+	numaMemParam = numaMemParam
-+	config.qemuParams = append(config.qemuParams, "-machine")
-+	config.qemuParams = append(config.qemuParams, "memory-backend="+dimmName)
- }
- 
- func (config *Config) appendKnobs() {
-@@ -3068,9 +3051,7 @@ func (config *Config) appendKnobs() {
+@@ -3068,9 +3065,7 @@ func (config *Config) appendKnobs() {
  		config.qemuParams = append(config.qemuParams, "-no-user-config")
  	}
  
@@ -236,7 +275,7 @@ index 5b618eb01..1470a3533 100644
  
  	if config.Knobs.NoGraphic {
  		config.qemuParams = append(config.qemuParams, "-nographic")
-@@ -3154,6 +3135,11 @@ func (config *Config) appendFwCfg(logger QMPLog) {
+@@ -3154,6 +3149,11 @@ func (config *Config) appendFwCfg(logger QMPLog) {
  	}
  }
  
@@ -248,7 +287,7 @@ index 5b618eb01..1470a3533 100644
  // LaunchQemu can be used to launch a new qemu instance.
  //
  // The Config parameter contains a set of qemu parameters and settings.
-@@ -3167,10 +3153,6 @@ func LaunchQemu(config Config, logger QMPLog) (*exec.Cmd, io.ReadCloser, error)
+@@ -3167,10 +3167,6 @@ func LaunchQemu(config Config, logger QMPLog) (*exec.Cmd, io.ReadCloser, error)
  	config.appendQMPSockets()
  	config.appendMemory()
  	config.appendDevices(logger)
@@ -259,7 +298,7 @@ index 5b618eb01..1470a3533 100644
  	config.appendKnobs()
  	config.appendKernel()
  	config.appendBios()
-@@ -3179,6 +3161,8 @@ func LaunchQemu(config Config, logger QMPLog) (*exec.Cmd, io.ReadCloser, error)
+@@ -3179,6 +3175,8 @@ func LaunchQemu(config Config, logger QMPLog) (*exec.Cmd, io.ReadCloser, error)
  	config.appendPidFile()
  	config.appendFwCfg(logger)
  	config.appendSeccompSandbox()
@@ -268,6 +307,71 @@ index 5b618eb01..1470a3533 100644
  
  	if err := config.appendCPUs(); err != nil {
  		return nil, nil, err
+@@ -3226,8 +3224,52 @@ func LaunchCustomQemu(ctx context.Context, path string, params []string, fds []*
+ 		path = "qemu-system-x86_64"
+ 	}
+ 
++	lock_file := "/root/kata_lock"
++	file, err := os.Create(lock_file)
++	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX); err != nil {
++		logger.Errorf("add exclude lock in no block failed", err)
++		return nil, nil, err
++	}
++
++	// get the existing CPU affinity list
++	pidCmd := exec.Command("pidof", "qemu-system-aarch64")
++	pidOutput, _ := pidCmd.Output()
++	pids := strings.Fields(string(pidOutput))
++
++	m := map[int]int{}
++	for _, pid := range pids {
++		tasksetCmd := exec.Command("taskset", "-pc", pid)
++		cpus, _ := tasksetCmd.Output()
++		num, _ := strconv.Atoi(strings.TrimSpace((strings.Split(strings.Split(string(cpus), ":")[1], "-")[0])))
++		m[num] = -1
++	}
++
++	numCPU := runtime.NumCPU()
++	if smp_cpu > numCPU {
++		logger.Errorf("invalid config, smp %d is too large", smp_cpu)
++		return nil, nil, nil
++	}
++
++	// compute CPU affinity for QEMU Command
++	exit := true
++	start_cpu := -smp_cpu
++	for exit {
++		start_cpu += smp_cpu
++		_, exit = m[start_cpu]
++	}
++	end_cpu := start_cpu + smp_cpu - 1
++	if start_cpu >= numCPU || end_cpu >= numCPU {
++		start_cpu = 0
++		end_cpu = start_cpu + smp_cpu - 1
++	}
++	cpu := strconv.Itoa(start_cpu) + "-" + strconv.Itoa(end_cpu)
++
++	// construct the QEMU Command
++	tasksetArgs := []string{"-c", cpu, path}
++	tasksetArgs = append(tasksetArgs, params...)
++	cmd := exec.CommandContext(ctx, "taskset", tasksetArgs...)
++
+ 	/* #nosec */
+-	cmd := exec.CommandContext(ctx, path, params...)
+ 	if len(fds) > 0 {
+ 		logger.Infof("Adding extra file %v", fds)
+ 		cmd.ExtraFiles = fds
+@@ -3247,5 +3289,10 @@ func LaunchCustomQemu(ctx context.Context, path string, params []string, fds []*
+ 		logger.Errorf("Unable to launch %s: %v", path, err)
+ 		return nil, nil, err
+ 	}
++
++	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_UN); err != nil {
++		log.Println("unlock exclude lock failed", err)
++	}
++
+ 	return cmd, reader, nil
+ }
 diff --git a/src/runtime/pkg/katautils/create.go b/src/runtime/pkg/katautils/create.go
 index bcc7d8ce7..07238aa03 100644
 --- a/src/runtime/pkg/katautils/create.go
@@ -311,7 +415,7 @@ index 27d75ecc4..660a78dc5 100644
  	devices, err = q.arch.appendConsole(ctx, devices, console)
  	if err != nil {
 diff --git a/src/runtime/virtcontainers/qemu_arm64.go b/src/runtime/virtcontainers/qemu_arm64.go
-index 9e05c5452..814a27d51 100644
+index 9e05c5452..e984a3f2f 100644
 --- a/src/runtime/virtcontainers/qemu_arm64.go
 +++ b/src/runtime/virtcontainers/qemu_arm64.go
 @@ -29,10 +29,18 @@ const defaultQemuMachineType = QemuVirt
@@ -330,10 +434,31 @@ index 9e05c5452..814a27d51 100644
 +	{"kaslr.disabled", "1"},
 +	{"rodata", "off"},
 +	{"cma", "64M"},
-+	{"cvm_guest", "1"},
++	{"virtcca_cvm_guest", "1"},
  }
  
  var supportedQemuMachine = govmmQemu.Machine{
+diff --git a/src/runtime/virtcontainers/virtiofsd.go b/src/runtime/virtcontainers/virtiofsd.go
+index 3e02756eb..ff46691bd 100644
+--- a/src/runtime/virtcontainers/virtiofsd.go
++++ b/src/runtime/virtcontainers/virtiofsd.go
+@@ -186,9 +186,14 @@ func (v *virtiofsd) args(FdSocketNumber uint) ([]string, error) {
+ 		// Send logs to syslog
+ 		"--syslog",
+ 		// cache mode for virtiofsd
+-		"--cache=" + v.cache,
++		"-o",
++		"cache=" + v.cache,
+ 		// shared directory tree
+-		"--shared-dir=" + v.sourcePath,
++		"-o",
++		"source=" + v.sourcePath,
++		// Announce sub-mount points to the guest
++		"-o",
++		"announce_submounts",
+ 		// fd number of vhost-user socket
+ 		fmt.Sprintf("--fd=%v", FdSocketNumber),
+ 	}
 -- 
-2.27.0
+2.33.0
 
