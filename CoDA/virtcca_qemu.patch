@@ -1,0 +1,103 @@
+From 9681a12376e13366bc6a3cb3a1a7654a7ab7ccdf Mon Sep 17 00:00:00 2001
+From: yangxiangkai <yangxiangkai@huawei.com>
+Date: Mon, 23 Sep 2024 19:23:37 +0800
+Subject: [PATCH] Added CoDA feature support in the context of CVM. When
+ virtcca cvm is enabled, the iommu is tagged as secure.
+
+---
+ hw/vfio/container.c        | 11 +++++++++++
+ hw/virtio/virtio-bus.c     |  7 +++++++
+ linux-headers/linux/vfio.h |  2 ++
+ 3 files changed, 20 insertions(+)
+
+diff --git a/hw/vfio/container.c b/hw/vfio/container.c
+index d8b9117..5785b99 100644
+--- a/hw/vfio/container.c
++++ b/hw/vfio/container.c
+@@ -33,6 +33,7 @@
+ #include "trace.h"
+ #include "qapi/error.h"
+ #include "migration/migration.h"
++#include "sysemu/kvm.h"
+ 
+ VFIOGroupList vfio_group_list =
+     QLIST_HEAD_INITIALIZER(vfio_group_list);
+@@ -418,6 +419,10 @@ static int vfio_init_container(VFIOContainer *container, int group_fd,
+         return iommu_type;
+     }
+ 
++    if (virtcca_cvm_enabled()) {
++        iommu_type = VFIO_TYPE1v2_S_IOMMU;
++    }
++
+     ret = ioctl(group_fd, VFIO_GROUP_SET_CONTAINER, &container->fd);
+     if (ret) {
+         error_setg_errno(errp, errno, "Failed to set group container");
+@@ -625,6 +630,7 @@ static int vfio_connect_container(VFIOGroup *group, AddressSpace *as,
+     switch (container->iommu_type) {
+     case VFIO_TYPE1v2_IOMMU:
+     case VFIO_TYPE1_IOMMU:
++    case VFIO_TYPE1v2_S_IOMMU:
+     {
+         struct vfio_iommu_type1_info *info;
+ 
+@@ -857,6 +863,11 @@ static int vfio_get_device(VFIOGroup *group, const char *name,
+         return -1;
+     }
+ 
++    if (!virtcca_cvm_enabled() && (info->flags & VFIO_DEVICE_FLAGS_SECURE)) {
++        error_setg(errp, "Normal vm cannot use confidential device.");
++        return -1;
++    }
++
+     /*
+      * Set discarding of RAM as not broken for this group if the driver knows
+      * the device operates compatibly with discarding.  Setting must be
+diff --git a/hw/virtio/virtio-bus.c b/hw/virtio/virtio-bus.c
+index 4f16e7e..749df64 100644
+--- a/hw/virtio/virtio-bus.c
++++ b/hw/virtio/virtio-bus.c
+@@ -30,6 +30,7 @@
+ #include "hw/virtio/virtio-bus.h"
+ #include "hw/virtio/virtio.h"
+ #include "exec/address-spaces.h"
++#include "sysemu/kvm.h"
+ 
+ /* #define DEBUG_VIRTIO_BUS */
+ 
+@@ -71,6 +72,12 @@ void virtio_bus_device_plugged(VirtIODevice *vdev, Error **errp)
+         return;
+     }
+ 
++    if (virtcca_cvm_enabled() && (strcmp(vdev->name, "vhost-user-fs") == 0)) {
++        /* VIRTIO_F_IOMMU_PLATFORM should be enabled for vhost-user-fs using swiotlb */
++        error_setg(errp, "iommu_platform is not supported by this device");
++        return;
++    } 
++
+     if (klass->device_plugged != NULL) {
+         klass->device_plugged(qbus->parent, &local_err);
+     }
+diff --git a/linux-headers/linux/vfio.h b/linux-headers/linux/vfio.h
+index 956154e..c27a43d 100644
+--- a/linux-headers/linux/vfio.h
++++ b/linux-headers/linux/vfio.h
+@@ -25,6 +25,7 @@
+ #define VFIO_TYPE1_IOMMU		1
+ #define VFIO_SPAPR_TCE_IOMMU		2
+ #define VFIO_TYPE1v2_IOMMU		3
++#define VFIO_TYPE1v2_S_IOMMU		12
+ /*
+  * IOMMU enforces DMA cache coherence (ex. PCIe NoSnoop stripping).  This
+  * capability is subject to change as groups are added or removed.
+@@ -224,6 +225,7 @@ struct vfio_device_info {
+ #define VFIO_DEVICE_FLAGS_FSL_MC (1 << 6)	/* vfio-fsl-mc device */
+ #define VFIO_DEVICE_FLAGS_CAPS	(1 << 7)	/* Info supports caps */
+ #define VFIO_DEVICE_FLAGS_CDX	(1 << 8)	/* vfio-cdx device */
++#define VFIO_DEVICE_FLAGS_SECURE	(1 << 9)	/* secure pci device */
+ 	__u32	num_regions;	/* Max region index + 1 */
+ 	__u32	num_irqs;	/* Max IRQ index + 1 */
+ 	__u32   cap_offset;	/* Offset within info struct of first cap */
+-- 
+2.34.1
+

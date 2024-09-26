@@ -1,0 +1,212 @@
+From 5d3ef1269c09fca6cb4db9c637543b48dcca7152 Mon Sep 17 00:00:00 2001
+From: yangxiangkai <yangxiangkai@huawei.com>
+Date: Thu, 26 Sep 2024 13:53:21 +0800
+Subject: [PATCH 2/2] guest config
+
+Signed-off-by: yangxiangkai <yangxiangkai@huawei.com>
+---
+ arch/arm64/configs/openeuler_defconfig | 46 +++++++++++++-------------
+ drivers/block/Kconfig                  |  2 +-
+ drivers/net/Kconfig                    |  2 +-
+ drivers/virtio/Kconfig                 |  6 ++--
+ 4 files changed, 28 insertions(+), 28 deletions(-)
+
+diff --git a/arch/arm64/configs/openeuler_defconfig b/arch/arm64/configs/openeuler_defconfig
+index 45d9443367e1..42a452b278b0 100644
+--- a/arch/arm64/configs/openeuler_defconfig
++++ b/arch/arm64/configs/openeuler_defconfig
+@@ -1938,9 +1938,9 @@ CONFIG_RFKILL=m
+ CONFIG_RFKILL_LEDS=y
+ CONFIG_RFKILL_INPUT=y
+ CONFIG_RFKILL_GPIO=m
+-CONFIG_NET_9P=m
++CONFIG_NET_9P=y
+ CONFIG_NET_9P_FD=m
+-CONFIG_NET_9P_VIRTIO=m
++CONFIG_NET_9P_VIRTIO=y
+ # CONFIG_NET_9P_RDMA is not set
+ # CONFIG_NET_9P_DEBUG is not set
+ # CONFIG_CAIF is not set
+@@ -2395,7 +2395,7 @@ CONFIG_CDROM_PKTCDVD=m
+ CONFIG_CDROM_PKTCDVD_BUFFERS=8
+ # CONFIG_CDROM_PKTCDVD_WCACHE is not set
+ CONFIG_ATA_OVER_ETH=m
+-CONFIG_VIRTIO_BLK=m
++CONFIG_VIRTIO_BLK=y
+ CONFIG_BLK_DEV_RBD=m
+ # CONFIG_BLK_DEV_UBLK is not set
+ 
+@@ -2601,7 +2601,7 @@ CONFIG_SCSI_DEBUG=m
+ # CONFIG_SCSI_PMCRAID is not set
+ # CONFIG_SCSI_PM8001 is not set
+ # CONFIG_SCSI_BFA_FC is not set
+-CONFIG_SCSI_VIRTIO=m
++CONFIG_SCSI_VIRTIO=y
+ CONFIG_SCSI_CHELSIO_FCOE=m
+ CONFIG_SCSI_DH=y
+ CONFIG_SCSI_DH_RDAC=y
+@@ -2820,7 +2820,7 @@ CONFIG_TUN=m
+ CONFIG_TAP=m
+ # CONFIG_TUN_VNET_CROSS_LE is not set
+ CONFIG_VETH=m
+-CONFIG_VIRTIO_NET=m
++CONFIG_VIRTIO_NET=y
+ CONFIG_NLMON=m
+ CONFIG_NET_VRF=m
+ CONFIG_VSOCKMON=m
+@@ -6444,11 +6444,11 @@ CONFIG_VFIO_PLATFORM=m
+ 
+ # CONFIG_VIRT_DRIVERS is not set
+ CONFIG_VIRTIO_ANCHOR=y
+-CONFIG_VIRTIO=m
+-CONFIG_VIRTIO_PCI_LIB=m
++CONFIG_VIRTIO=y
++CONFIG_VIRTIO_PCI_LIB=y
+ CONFIG_VIRTIO_PCI_LIB_LEGACY=m
+ CONFIG_VIRTIO_MENU=y
+-CONFIG_VIRTIO_PCI=m
++CONFIG_VIRTIO_PCI=y
+ CONFIG_VIRTIO_PCI_LEGACY=y
+ # CONFIG_VIRTIO_VDPA is not set
+ # CONFIG_VIRTIO_PMEM is not set
+@@ -6949,16 +6949,16 @@ CONFIG_LEGACY_DIRECT_IO=y
+ CONFIG_EXT3_FS=m
+ # CONFIG_EXT3_FS_POSIX_ACL is not set
+ # CONFIG_EXT3_FS_SECURITY is not set
+-CONFIG_EXT4_FS=m
++CONFIG_EXT4_FS=y
+ CONFIG_EXT4_USE_FOR_EXT2=y
+ CONFIG_EXT4_FS_POSIX_ACL=y
+ CONFIG_EXT4_FS_SECURITY=y
+ # CONFIG_EXT4_DEBUG is not set
+ CONFIG_EXT4_ERROR_REPORT=y
+ # CONFIG_EXT4_DIOREAD_NOLOCK_PARAM is not set
+-CONFIG_JBD2=m
++CONFIG_JBD2=y
+ # CONFIG_JBD2_DEBUG is not set
+-CONFIG_FS_MBCACHE=m
++CONFIG_FS_MBCACHE=y
+ # CONFIG_REISERFS_FS is not set
+ # CONFIG_JFS_FS is not set
+ CONFIG_XFS_FS=m
+@@ -7152,17 +7152,17 @@ CONFIG_EROFS_FS_SECURITY=y
+ # CONFIG_EROFS_FS_ZIP is not set
+ CONFIG_EROFS_FS_ONDEMAND=y
+ CONFIG_NETWORK_FILESYSTEMS=y
+-CONFIG_NFS_FS=m
++CONFIG_NFS_FS=y
+ CONFIG_NFS_V2=m
+-CONFIG_NFS_V3=m
++CONFIG_NFS_V3=y
+ CONFIG_NFS_V3_ACL=y
+-CONFIG_NFS_V4=m
++CONFIG_NFS_V4=y
+ # CONFIG_NFS_SWAP is not set
+ CONFIG_NFS_V4_1=y
+ CONFIG_NFS_V4_2=y
+-CONFIG_PNFS_FILE_LAYOUT=m
++CONFIG_PNFS_FILE_LAYOUT=y
+ CONFIG_PNFS_BLOCK=m
+-CONFIG_PNFS_FLEXFILE_LAYOUT=m
++CONFIG_PNFS_FLEXFILE_LAYOUT=y
+ CONFIG_NFS_V4_1_IMPLEMENTATION_ID_DOMAIN="kernel.org"
+ # CONFIG_NFS_V4_1_MIGRATION is not set
+ CONFIG_NFS_V4_SECURITY_LABEL=y
+@@ -7172,7 +7172,7 @@ CONFIG_NFS_USE_KERNEL_DNS=y
+ CONFIG_NFS_DEBUG=y
+ # CONFIG_NFS_DISABLE_UDP_SUPPORT is not set
+ # CONFIG_NFS_V4_2_READ_PLUS is not set
+-CONFIG_NFSD=m
++CONFIG_NFSD=y
+ # CONFIG_NFSD_V2 is not set
+ CONFIG_NFSD_V3_ACL=y
+ CONFIG_NFSD_V4=y
+@@ -7182,14 +7182,14 @@ CONFIG_NFSD_SCSILAYOUT=y
+ CONFIG_NFSD_FLEXFILELAYOUT=y
+ CONFIG_NFSD_V4_2_INTER_SSC=y
+ CONFIG_NFSD_V4_SECURITY_LABEL=y
+-CONFIG_GRACE_PERIOD=m
+-CONFIG_LOCKD=m
++CONFIG_GRACE_PERIOD=y
++CONFIG_LOCKD=y
+ CONFIG_LOCKD_V4=y
+-CONFIG_NFS_ACL_SUPPORT=m
++CONFIG_NFS_ACL_SUPPORT=y
+ CONFIG_NFS_COMMON=y
+ CONFIG_NFS_V4_2_SSC_HELPER=y
+-CONFIG_SUNRPC=m
+-CONFIG_SUNRPC_GSS=m
++CONFIG_SUNRPC=y
++CONFIG_SUNRPC_GSS=y
+ CONFIG_SUNRPC_BACKCHANNEL=y
+ CONFIG_RPCSEC_GSS_KRB5=m
+ CONFIG_RPCSEC_GSS_KRB5_ENCTYPES_AES_SHA1=y
+@@ -7917,7 +7917,7 @@ CONFIG_DEBUG_INFO_DWARF4=y
+ CONFIG_DEBUG_INFO_COMPRESSED_NONE=y
+ # CONFIG_DEBUG_INFO_COMPRESSED_ZLIB is not set
+ # CONFIG_DEBUG_INFO_SPLIT is not set
+-CONFIG_DEBUG_INFO_BTF=y
++# CONFIG_DEBUG_INFO_BTF is not set
+ CONFIG_PAHOLE_HAS_SPLIT_BTF=y
+ CONFIG_PAHOLE_HAS_LANG_EXCLUDE=y
+ CONFIG_DEBUG_INFO_BTF_MODULES=y
+diff --git a/drivers/block/Kconfig b/drivers/block/Kconfig
+index 5b9d4aaebb81..8a124d79888c 100644
+--- a/drivers/block/Kconfig
++++ b/drivers/block/Kconfig
+@@ -347,7 +347,7 @@ config XEN_BLKDEV_BACKEND
+ 
+ 
+ config VIRTIO_BLK
+-	tristate "Virtio block driver"
++	bool "Virtio block driver"
+ 	depends on VIRTIO
+ 	select SG_POOL
+ 	help
+diff --git a/drivers/net/Kconfig b/drivers/net/Kconfig
+index 3531558c7b51..44b2108dafea 100644
+--- a/drivers/net/Kconfig
++++ b/drivers/net/Kconfig
+@@ -438,7 +438,7 @@ config VETH
+ 	  versa.
+ 
+ config VIRTIO_NET
+-	tristate "Virtio network driver"
++	bool "Virtio network driver"
+ 	depends on VIRTIO
+ 	select NET_FAILOVER
+ 	help
+diff --git a/drivers/virtio/Kconfig b/drivers/virtio/Kconfig
+index 0a53a61231c2..b4e35df663b6 100644
+--- a/drivers/virtio/Kconfig
++++ b/drivers/virtio/Kconfig
+@@ -3,7 +3,7 @@ config VIRTIO_ANCHOR
+ 	bool
+ 
+ config VIRTIO
+-	tristate
++	bool
+ 	select VIRTIO_ANCHOR
+ 	help
+ 	  This option is selected by any driver which implements the virtio
+@@ -11,7 +11,7 @@ config VIRTIO
+ 	  or CONFIG_S390_GUEST.
+ 
+ config VIRTIO_PCI_LIB
+-	tristate
++	bool
+ 	help
+ 	  Modern PCI device implementation. This module implements the
+ 	  basic probe and control for devices which are based on modern
+@@ -48,7 +48,7 @@ config VIRTIO_HARDEN_NOTIFICATION
+           If unsure, say N.
+ 
+ config VIRTIO_PCI
+-	tristate "PCI driver for virtio devices"
++	bool "PCI driver for virtio devices"
+ 	depends on PCI
+ 	select VIRTIO_PCI_LIB
+ 	select VIRTIO
+-- 
+2.34.1
+
