@@ -1,0 +1,548 @@
+---
+ Cargo.toml                                    |  12 +-
+ attestation-agent/app/Cargo.toml              |   6 +-
+ attestation-agent/attester/Cargo.toml         |   9 +-
+ attestation-agent/attester/src/lib.rs         |  14 ++-
+ attestation-agent/attester/src/virtcca/mod.rs | 105 ++++++++++++++++++
+ .../attester/src/virtcca/virtcca.rs           | 104 +++++++++++++++++
+ attestation-agent/kbc/Cargo.toml              |   2 -
+ attestation-agent/kbs_protocol/Cargo.toml     |   2 -
+ .../kbs_protocol/src/client/rcar_client.rs    |  11 +-
+ attestation-agent/lib/Cargo.toml              |   2 -
+ attestation-agent/test-binaries/Cargo.toml    |   2 +-
+ image-rs/Cargo.toml                           |   3 -
+ image-rs/src/stream.rs                        |   2 +-
+ ocicrypt-rs/Cargo.toml                        |   2 +-
+ 14 files changed, 253 insertions(+), 23 deletions(-)
+ create mode 100644 attestation-agent/attester/src/virtcca/mod.rs
+ create mode 100644 attestation-agent/attester/src/virtcca/virtcca.rs
+
+diff --git a/Cargo.toml b/Cargo.toml
+index b10de14..1b5c135 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -20,13 +20,16 @@ members = [
+ ]
+ 
+ [workspace.dependencies]
++config = "0.14.0"
+ aes = "0.8.3"
+ aes-gcm = "0.10.2"
++actix-web = "4.5"
+ anyhow = "1.0"
+ assert-json-diff = "2.0"
+ async-trait = "0.1.71"
+ base64 = "0.21.2"
+ base64-serde = "0.7"
++base64-url = "3.0.0"
+ bincode = "1.3.3"
+ cfg-if = "1.0.0"
+ chrono = "0.4.26"
+@@ -34,11 +37,13 @@ clap = "~4.2.7"
+ const_format = "0.2.30"
+ ctr = "0.9.2"
+ env_logger = "0.10.0"
++futures = "0.3.30"
+ hex = "0.4.3"
+ hmac = "0.12.1"
+ jwt-simple = "0.11"
++jsonwebtoken = "9.3.0"
+ # TODO: change it to "0.5", once released.
+-kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "c90df0e" }
++kbs-types = { path = "../kbs-types" }
+ lazy_static = "1.4.0"
+ log = "0.4.14"
+ openssl = "0.10"
+@@ -54,6 +59,7 @@ serde = { version = "1.0", features = ["derive"] }
+ serde_json = "1.0"
+ serial_test = "1"
+ sha2 = "0.10.7"
++safer-ffi = "0.1.8"
+ strum = { version = "0.25", features = ["derive"] }
+ tempfile = "3.2"
+ testcontainers = "0.14"
+@@ -67,6 +73,10 @@ ttrpc-codegen = "0.4.2"
+ url = "2.3.1"
+ uuid = "1"
+ zeroize = "1.5.7"
++cose-rust = "0.1.7"
++ciborium = "0.2.2"
++ima-measurements = "0.2.0"
++fallible-iterator = "0.2.0"
+ 
+ [patch.crates-io]
+ oci-distribution = { git = "https://github.com/krustlet/oci-distribution.git", rev = "f44124c" }
+diff --git a/attestation-agent/app/Cargo.toml b/attestation-agent/app/Cargo.toml
+index 99da786..3c2ced3 100644
+--- a/attestation-agent/app/Cargo.toml
++++ b/attestation-agent/app/Cargo.toml
+@@ -9,6 +9,7 @@ edition = "2021"
+ anyhow.workspace = true
+ async-trait.workspace = true
+ attestation_agent = { path = "../lib", default-features = false }
++attester = { path = "../attester", features = ["virtcca-attester"] }
+ base64.workspace = true
+ cfg-if.workspace = true
+ clap = { workspace = true, features = ["derive"] }
+@@ -29,7 +30,8 @@ tonic-build = { workspace = true, optional = true }
+ ttrpc-codegen = { workspace = true, optional = true }
+ 
+ [features]
+-default = ["sample_kbc", "ttrpc"]
++default = ["sample_kbc", "ttrpc", "virtcca-attester"]
++virtcca-attester = ["attester/virtcca-attester"]
+ grpc = ["tonic", "prost", "tonic-build"]
+ ttrpc = ["dep:ttrpc", "ttrpc-codegen", "protobuf"]
+ sample_kbc = ["attestation_agent/sample_kbc"]
+@@ -37,8 +39,6 @@ cc_kbc = ["attestation_agent/cc_kbc"]
+ 
+ # attester suites of cc-kbc
+ cc_kbc_all_attesters = ["cc_kbc", "attestation_agent/all-attesters"]
+-cc_kbc_tdx = ["cc_kbc", "attestation_agent/tdx-attester"]
+-cc_kbc_sgx = ["cc_kbc", "attestation_agent/sgx-attester"]
+ cc_kbc_az_snp_vtpm = ["cc_kbc", "attestation_agent/az-snp-vtpm-attester"]
+ cc_kbc_snp = ["cc_kbc", "attestation_agent/snp-attester"]
+ 
+diff --git a/attestation-agent/attester/Cargo.toml b/attestation-agent/attester/Cargo.toml
+index 91a569f..043512e 100644
+--- a/attestation-agent/attester/Cargo.toml
++++ b/attestation-agent/attester/Cargo.toml
+@@ -16,6 +16,8 @@ nix = {version = "0.26.2", optional = true }
+ occlum_dcap = { git = "https://github.com/occlum/occlum", tag = "v0.29.7", optional = true }
+ serde.workspace = true
+ serde_json.workspace = true
++rand = { workspace = true, optional = true }
++base64-url = { workspace = true, optional = true }
+ sev = { version = "1.2.0", default-features = false, features = ["snp"], optional = true }
+ strum.workspace = true
+ tdx-attest-rs = { git = "https://github.com/intel/SGXDataCenterAttestationPrimitives", tag = "DCAP_1.16", optional = true }
+@@ -25,16 +27,15 @@ codicon = { version = "3.0", optional = true }
+ hyper = { version = "0.14", features = ["full"], optional = true }
+ hyper-tls = { version = "0.5", optional = true }
+ tokio = { version = "1", features = ["full"], optional = true }
++hex = "0.4.3"
+ 
+ [dev-dependencies]
+ tokio.workspace = true
+ 
+ [features]
+ default = ["all-attesters"]
+-all-attesters = ["tdx-attester", "sgx-attester", "az-snp-vtpm-attester", "snp-attester", "csv-attester", "cca-attester"]
+-
+-tdx-attester = ["tdx-attest-rs"]
+-sgx-attester = ["occlum_dcap"]
++all-attesters = ["az-snp-vtpm-attester", "snp-attester", "csv-attester", "cca-attester","virtcca-attester"]
++virtcca-attester = []
+ az-snp-vtpm-attester = ["az-snp-vtpm"]
+ snp-attester = ["sev"]
+ csv-attester = ["csv-rs", "codicon", "hyper", "hyper-tls", "tokio"]
+diff --git a/attestation-agent/attester/src/lib.rs b/attestation-agent/attester/src/lib.rs
+index b1ade1f..2e6f1be 100644
+--- a/attestation-agent/attester/src/lib.rs
++++ b/attestation-agent/attester/src/lib.rs
+@@ -5,7 +5,7 @@
+ 
+ use anyhow::*;
+ use kbs_types::Tee;
+-
++use log::debug;
+ pub mod sample;
+ 
+ #[cfg(feature = "az-snp-vtpm-attester")]
+@@ -26,6 +26,8 @@ pub mod snp;
+ #[cfg(feature = "csv-attester")]
+ pub mod csv;
+ 
++#[cfg(feature = "virtcca-attester")]
++pub mod virtcca;
+ pub type BoxedAttester = Box<dyn Attester + Send + Sync>;
+ 
+ impl TryFrom<Tee> for BoxedAttester {
+@@ -46,6 +48,8 @@ impl TryFrom<Tee> for BoxedAttester {
+             Tee::Snp => Box::<snp::SnpAttester>::default(),
+             #[cfg(feature = "csv-attester")]
+             Tee::Csv => Box::<csv::CsvAttester>::default(),
++            #[cfg(feature = "virtcca-attester")]
++            Tee::Virtcca => Box::<virtcca::VirtccaAttester>::default(),
+             _ => bail!("TEE is not supported!"),
+         };
+ 
+@@ -97,5 +101,13 @@ pub fn detect_tee_type() -> Option<Tee> {
+         return Some(Tee::Cca);
+     }
+ 
++    #[cfg(feature = "virtcca-attester")]
++    {
++        if virtcca::detect_platform() {
++            debug!("virtCCA platform detected");
++            return Some(Tee::Virtcca);
++        }
++    }
++    debug!("No supported TEE platform detected");
+     None
+ }
+diff --git a/attestation-agent/attester/src/virtcca/mod.rs b/attestation-agent/attester/src/virtcca/mod.rs
+new file mode 100644
+index 0000000..8ecb20d
+--- /dev/null
++++ b/attestation-agent/attester/src/virtcca/mod.rs
+@@ -0,0 +1,105 @@
++/*
++ * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
++ * secGear is licensed under the Mulan PSL v2.
++ * You can use this software according to the terms and conditions of the Mulan PSL v2.
++ * You may obtain a copy of Mulan PSL v2 at:
++ *     http://license.coscl.org.cn/MulanPSL2
++ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
++ * PURPOSE.
++ * See the Mulan PSL v2 for more details.
++ */
++
++//! virtcca tee plugin
++//!
++//! Call the hardware sdk or driver to get the specific evidence
++
++use anyhow::{bail, Result};
++use log::{debug};
++use serde::{Deserialize, Serialize};
++use std::path::Path;
++
++use self::virtcca::{get_attestation_token, get_dev_cert, tsi_new_ctx};
++use crate::virtcca::virtcca::tsi_free_ctx;
++use super::Attester;
++use anyhow::Context;
++
++mod virtcca;
++
++#[derive(Debug, Default)]
++pub struct VirtccaAttester {}
++
++#[async_trait::async_trait]
++impl Attester for VirtccaAttester {
++    async fn get_evidence(&self, challenge: Vec<u8>) -> Result<String> {
++        let evidence = virtcca_get_token(challenge)?;
++        let evidence = serde_json::to_string(&evidence)?;
++        log::debug!("Exiting get_evidence function with evidence: {}", evidence);
++        Ok(evidence)
++    }
++}
++
++pub fn detect_platform() -> bool {
++    Path::new("/dev/tsi").exists()
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct VirtccaEvidence {
++    pub evidence: Vec<u8>,
++    pub dev_cert: Vec<u8>,
++    pub ima_log: Option<Vec<u8>>,
++}
++
++pub fn virtcca_get_token(challenge: Vec<u8>) -> Result<VirtccaEvidence> {
++    debug!("Entering virtcca_get_token");
++    debug!("Challenge: {:?}", challenge);
++    debug!("Challenge length: {}", challenge.len());
++    debug!("Challenge (hex): {}", hex::encode(&challenge));
++    unsafe {
++        let ctx = tsi_new_ctx();
++        println!("tsi_new_ctx called");
++
++        let mut challenge = challenge.to_vec();
++        let p_challenge = challenge.as_mut_ptr() as *mut ::std::os::raw::c_uchar;
++        let challenge_len = challenge.len() as usize;
++        let mut token = Vec::new();
++        token.resize(4096, b'\0');
++        let p_token = token.as_mut_ptr() as *mut ::std::os::raw::c_uchar;
++        let mut token_len = token.len();
++        let p_token_len = &mut token_len as *mut usize;
++        let ret = get_attestation_token(ctx, p_challenge, challenge_len, p_token, p_token_len);
++        println!("get_attestation_token returned: {}", ret);
++        if ret != 0 {
++            log::error!("virtcca get attestation token failed {}", ret);
++            bail!("virtcca get attestation token failed {}", ret);
++        }
++        token.set_len(token_len);
++        log::debug!("Attestation token obtained successfully, token length: {}", token_len);
++
++        let mut dev_cert = Vec::new();
++        dev_cert.resize(4096, b'\0');
++        let p_dev_cert = dev_cert.as_mut_ptr() as *mut ::std::os::raw::c_uchar;
++        let mut dev_cert_len = dev_cert.len();
++        let p_dev_cert_len = &mut dev_cert_len as *mut usize;
++        let ret = get_dev_cert(ctx, p_dev_cert, p_dev_cert_len);
++        if ret != 0 {
++            log::error!("get dev cert failed {}", ret);
++            bail!("get dev cert failed {}", ret);
++        }
++        dev_cert.set_len(dev_cert_len);
++        log::debug!("Device certificate obtained successfully, cert length: {}", dev_cert_len);
++
++        let ima_log = {
++            Some(std::fs::read("/sys/kernel/security/ima/binary_runtime_measurements").unwrap())
++        };
++        log::debug!("IMA log obtained successfully");
++
++        let evidence = VirtccaEvidence {
++            evidence: token,
++            dev_cert: dev_cert,
++            ima_log: ima_log,
++        };
++        let _ = tsi_free_ctx(ctx);
++        Ok(evidence)
++    }
++}
+diff --git a/attestation-agent/attester/src/virtcca/virtcca.rs b/attestation-agent/attester/src/virtcca/virtcca.rs
+new file mode 100644
+index 0000000..c2ff474
+--- /dev/null
++++ b/attestation-agent/attester/src/virtcca/virtcca.rs
+@@ -0,0 +1,104 @@
++/* automatically generated by rust-bindgen 0.69.4 */
++#[allow(non_camel_case_types)]
++pub type wchar_t = ::std::os::raw::c_int;
++#[repr(C)]
++#[repr(align(16))]
++#[derive(Debug, Copy, Clone)]
++pub struct max_align_t {
++    pub __clang_max_align_nonce1: ::std::os::raw::c_longlong,
++    pub __bindgen_padding_0: u64,
++    pub __clang_max_align_nonce2: u128,
++}
++#[test]
++fn bindgen_test_layout_max_align_t() {
++    const UNINIT: ::std::mem::MaybeUninit<max_align_t> = ::std::mem::MaybeUninit::uninit();
++    let ptr = UNINIT.as_ptr();
++    assert_eq!(
++        ::std::mem::size_of::<max_align_t>(),
++        32usize,
++        concat!("Size of: ", stringify!(max_align_t))
++    );
++    assert_eq!(
++        ::std::mem::align_of::<max_align_t>(),
++        16usize,
++        concat!("Alignment of ", stringify!(max_align_t))
++    );
++    assert_eq!(
++        unsafe { ::std::ptr::addr_of!((*ptr).__clang_max_align_nonce1) as usize - ptr as usize },
++        0usize,
++        concat!(
++        "Offset of field: ",
++        stringify!(max_align_t),
++        "::",
++        stringify!(__clang_max_align_nonce1)
++        )
++    );
++    assert_eq!(
++        unsafe { ::std::ptr::addr_of!((*ptr).__clang_max_align_nonce2) as usize - ptr as usize },
++        16usize,
++        concat!(
++        "Offset of field: ",
++        stringify!(max_align_t),
++        "::",
++        stringify!(__clang_max_align_nonce2)
++        )
++    );
++}
++#[repr(C)]
++#[derive(Debug, Copy, Clone)]
++pub struct tsi_ctx {
++    pub fd: wchar_t,
++}
++#[test]
++fn bindgen_test_layout_tsi_ctx() {
++    const UNINIT: ::std::mem::MaybeUninit<tsi_ctx> = ::std::mem::MaybeUninit::uninit();
++    let ptr = UNINIT.as_ptr();
++    assert_eq!(
++        ::std::mem::size_of::<tsi_ctx>(),
++        4usize,
++        concat!("Size of: ", stringify!(tsi_ctx))
++    );
++    assert_eq!(
++        ::std::mem::align_of::<tsi_ctx>(),
++        4usize,
++        concat!("Alignment of ", stringify!(tsi_ctx))
++    );
++    assert_eq!(
++        unsafe { ::std::ptr::addr_of!((*ptr).fd) as usize - ptr as usize },
++        0usize,
++        concat!(
++        "Offset of field: ",
++        stringify!(tsi_ctx),
++        "::",
++        stringify!(fd)
++        )
++    );
++}
++
++#[link(name = "vccaattestation")]
++extern "C" {
++    pub fn tsi_new_ctx() -> *mut tsi_ctx;
++}
++extern "C" {
++    pub fn tsi_free_ctx(ctx: *mut tsi_ctx);
++}
++extern "C" {
++    #[allow(dead_code)]
++    pub fn get_version(ctx: *mut tsi_ctx, major: *mut wchar_t, minor: *mut wchar_t) -> wchar_t;
++}
++extern "C" {
++    pub fn get_attestation_token(
++        ctx: *mut tsi_ctx,
++        challenge: *mut ::std::os::raw::c_uchar,
++        challenge_len: usize,
++        token: *mut ::std::os::raw::c_uchar,
++        token_len: *mut usize,
++    ) -> wchar_t;
++}
++extern "C" {
++    pub fn get_dev_cert(
++        ctx: *mut tsi_ctx,
++        dev_cert: *mut ::std::os::raw::c_uchar,
++        dev_cert_len: *mut usize,
++    ) -> wchar_t;
++}
+diff --git a/attestation-agent/kbc/Cargo.toml b/attestation-agent/kbc/Cargo.toml
+index 591e11d..8fe60d0 100644
+--- a/attestation-agent/kbc/Cargo.toml
++++ b/attestation-agent/kbc/Cargo.toml
+@@ -38,8 +38,6 @@ default = ["sample_kbc", "rust-crypto"]
+ 
+ cc_kbc = ["kbs_protocol/background_check"]
+ all-attesters = ["kbs_protocol?/all-attesters"]
+-tdx-attester = ["kbs_protocol/tdx-attester"]
+-sgx-attester = ["kbs_protocol/sgx-attester"]
+ az-snp-vtpm-attester= ["kbs_protocol/az-snp-vtpm-attester"]
+ snp-attester = ["kbs_protocol/snp-attester"]
+ cca-attester = ["kbs_protocol/cca-attester"]
+diff --git a/attestation-agent/kbs_protocol/Cargo.toml b/attestation-agent/kbs_protocol/Cargo.toml
+index 6017153..9a506a0 100644
+--- a/attestation-agent/kbs_protocol/Cargo.toml
++++ b/attestation-agent/kbs_protocol/Cargo.toml
+@@ -45,8 +45,6 @@ aa_token = ["ttrpc-codegen", "passport", "ttrpc/async", "protobuf"]
+ 
+ background_check = ["tokio/time"]
+ all-attesters = ["attester/all-attesters"]
+-tdx-attester = ["attester/tdx-attester"]
+-sgx-attester = ["attester/sgx-attester"]
+ az-snp-vtpm-attester = ["attester/az-snp-vtpm-attester"]
+ snp-attester = ["attester/snp-attester"]
+ csv-attester = ["attester/csv-attester"]
+diff --git a/attestation-agent/kbs_protocol/src/client/rcar_client.rs b/attestation-agent/kbs_protocol/src/client/rcar_client.rs
+index d4c2bf5..0ef9f7c 100644
+--- a/attestation-agent/kbs_protocol/src/client/rcar_client.rs
++++ b/attestation-agent/kbs_protocol/src/client/rcar_client.rs
+@@ -12,6 +12,7 @@ use log::{debug, warn};
+ use resource_uri::ResourceUri;
+ use serde::Deserialize;
+ use sha2::{Digest, Sha384};
++use base64::decode;
+ 
+ use crate::{
+     api::KbsClientCapabilities,
+@@ -174,8 +175,13 @@ impl KbsClient<Box<dyn EvidenceProvider>> {
+     }
+ 
+     async fn generate_evidence(&self, nonce: String, key_materials: Vec<&[u8]>) -> Result<String> {
++        debug!("Nonce (Base64): {}", nonce);
++        let nonce_bytes = decode(&nonce).map_err(|e| Error::GetEvidence(e.to_string()))?;
++        debug!("Nonce (decoded): {:?}", nonce_bytes);
++        debug!("Nonce length: {}", nonce_bytes.len());
++
+         let mut hasher = Sha384::new();
+-        hasher.update(nonce.as_bytes());
++        hasher.update(&nonce_bytes);
+         key_materials
+             .iter()
+             .for_each(|key_material| hasher.update(key_material));
+@@ -184,11 +190,12 @@ impl KbsClient<Box<dyn EvidenceProvider>> {
+ 
+         let tee_evidence = self
+             .provider
+-            .get_evidence(ehd)
++            .get_evidence(nonce_bytes)
+             .await
+             .context("Get TEE evidence failed")
+             .map_err(|e| Error::GetEvidence(e.to_string()))?;
+ 
++        debug!("TEE evidence length: {}", tee_evidence.len());
+         Ok(tee_evidence)
+     }
+ }
+diff --git a/attestation-agent/lib/Cargo.toml b/attestation-agent/lib/Cargo.toml
+index fbf9d90..8b2b11c 100644
+--- a/attestation-agent/lib/Cargo.toml
++++ b/attestation-agent/lib/Cargo.toml
+@@ -28,8 +28,6 @@ default = ["sample_kbc", "rust-crypto"]
+ 
+ cc_kbc = ["kbc/cc_kbc", "kbs_protocol/background_check"]
+ all-attesters = ["kbc/all-attesters", "kbs_protocol?/all-attesters", "attester/all-attesters"]
+-tdx-attester = ["kbc/tdx-attester", "kbs_protocol/tdx-attester", "attester/tdx-attester"]
+-sgx-attester = ["kbc/sgx-attester", "kbs_protocol/sgx-attester", "attester/sgx-attester"]
+ az-snp-vtpm-attester = ["kbc/az-snp-vtpm-attester", "kbs_protocol/az-snp-vtpm-attester", "attester/az-snp-vtpm-attester"]
+ snp-attester = ["kbc/snp-attester", "kbs_protocol/snp-attester", "attester/snp-attester"]
+ 
+diff --git a/attestation-agent/test-binaries/Cargo.toml b/attestation-agent/test-binaries/Cargo.toml
+index a5fe042..6dd90f5 100644
+--- a/attestation-agent/test-binaries/Cargo.toml
++++ b/attestation-agent/test-binaries/Cargo.toml
+@@ -15,4 +15,4 @@ attester = { path = "../attester", default-features = false, optional = true }
+ crypto = { path = "../deps/crypto" }
+ 
+ [features]
+-occlum = ["attester/sgx-attester"]
++
+diff --git a/image-rs/Cargo.toml b/image-rs/Cargo.toml
+index d599bad..9d44184 100644
+--- a/image-rs/Cargo.toml
++++ b/image-rs/Cargo.toml
+@@ -82,12 +82,10 @@ default = ["snapshot-overlayfs", "signature-cosign-rustls", "keywrap-grpc", "oci
+ # This will be based on `ring` dependency
+ kata-cc-rustls-tls = ["encryption-ring", "keywrap-ttrpc", "snapshot-overlayfs", "signature-cosign-rustls", "signature-simple", "getresource", "oci-distribution/rustls-tls"]
+ enclave-cc-eaakbc-rustls-tls = ["encryption-ring", "keywrap-native", "eaa-kbc", "snapshot-unionfs", "signature-simple", "getresource", "signature-cosign-rustls", "oci-distribution-rustls"]
+-enclave-cc-cckbc-rustls-tls = ["encryption-ring", "keywrap-native", "cc-kbc-sgx", "snapshot-unionfs", "signature-simple", "getresource", "signature-cosign-rustls", "oci-distribution-rustls"]
+ 
+ # This will be based on `openssl` dependency
+ kata-cc-native-tls = ["encryption-openssl", "keywrap-ttrpc", "snapshot-overlayfs", "signature-cosign-native", "signature-simple", "getresource", "oci-distribution/native-tls"]
+ enclave-cc-eaakbc-native-tls = ["encryption-openssl", "keywrap-native", "eaa-kbc", "snapshot-unionfs", "signature-simple", "getresource", "signature-cosign-native", "oci-distribution-native"]
+-enclave-cc-cckbc-native-tls = ["encryption-openssl", "keywrap-native", "cc-kbc-sgx", "snapshot-unionfs", "signature-simple", "getresource", "signature-cosign-native", "oci-distribution-native"]
+ 
+ encryption = ["ocicrypt-rs/block-cipher"]
+ encryption-ring = ["ocicrypt-rs/block-cipher-ring", "encryption"]
+@@ -102,7 +100,6 @@ keywrap-ttrpc = ["ocicrypt-rs/keywrap-keyprovider-ttrpc", "dep:ttrpc", "dep:prot
+ keywrap-jwe = ["ocicrypt-rs/keywrap-jwe"]
+ 
+ eaa-kbc = ["attestation_agent/eaa_kbc", "ocicrypt-rs/eaa_kbc"]
+-cc-kbc-sgx = ["attestation_agent/cc_kbc", "attestation_agent/sgx-attester", "ocicrypt-rs/cc_kbc_sgx"]
+ 
+ signature = ["hex"]
+ signature-cosign = ["signature", "futures"]
+diff --git a/image-rs/src/stream.rs b/image-rs/src/stream.rs
+index 8f2c56c..f79ef73 100644
+--- a/image-rs/src/stream.rs
++++ b/image-rs/src/stream.rs
+@@ -14,7 +14,7 @@ use crate::digest::{DigestHasher, LayerDigestHasher, DIGEST_SHA256_PREFIX, DIGES
+ use crate::unpack::unpack;
+ use crate::ERR_BAD_UNCOMPRESSED_DIGEST;
+ 
+-const CAPACITY: usize = 32768;
++const CAPACITY: usize = 65536;
+ 
+ // Wrap a channel with [`Read`](std::io::Read) support.
+ // This can bridge the [`AsyncRead`](tokio::io::AsyncRead) from
+diff --git a/ocicrypt-rs/Cargo.toml b/ocicrypt-rs/Cargo.toml
+index f473c92..f1bf3e1 100644
+--- a/ocicrypt-rs/Cargo.toml
++++ b/ocicrypt-rs/Cargo.toml
+@@ -49,7 +49,7 @@ default = ["block-cipher-openssl", "keywrap-jwe", "keywrap-keyprovider-cmd"]
+ eaa_kbc = ["keywrap-keyprovider-native", "attestation_agent/eaa_kbc"]
+ 
+ # Use cc kbc + SGX to request KEK
+-cc_kbc_sgx = ["keywrap-keyprovider-native", "attestation_agent/cc_kbc", "attestation_agent/sgx-attester"]
++
+ 
+ async-io = ["tokio"]
+ 
+-- 
+2.39.1.windows.1
+
