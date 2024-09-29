@@ -1,8 +1,3 @@
-From a56bd677903ceb298022d8e6d894349ea1e23485 Mon Sep 17 00:00:00 2001
-From: panhengchang <panhengchang@huawei.com>
-Date: Thu, 26 Sep 2024 14:59:00 +0800
-Subject: [PATCH] enable kata affinity
-
 ---
  accel/kvm/kvm-accel-ops.c | 43 +++++++++++++++++++++++++++++++++++++++
  hw/arm/virt.c             | 26 +++++++++++++++++++++++

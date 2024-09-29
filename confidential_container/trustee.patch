@@ -1,0 +1,86 @@
+---
+ proto/attestation.proto              | 3 ++-
+ src/api/Cargo.toml                   | 6 +++---
+ src/api/src/attestation/coco/grpc.rs | 1 +
+ tools/client/Cargo.toml              | 4 ++--
+ 4 files changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/proto/attestation.proto b/proto/attestation.proto
+index b83d2fe..3007b5b 100644
+--- a/proto/attestation.proto
++++ b/proto/attestation.proto
+@@ -11,6 +11,7 @@ enum Tee {
+     AzSnpVtpm = 5;
+     Csv = 6;
+     CCA = 7;
++    Virtcca = 8;
+ }
+ 
+ message AttestationRequest {
+@@ -30,4 +31,4 @@ message SetPolicyResponse {}
+ service AttestationService {
+     rpc AttestationEvaluate(AttestationRequest) returns (AttestationResponse) {};
+     rpc SetAttestationPolicy(SetPolicyRequest) returns (SetPolicyResponse) {};
+-}
+\ No newline at end of file
++}
+diff --git a/src/api/Cargo.toml b/src/api/Cargo.toml
+index 384414c..efebf0d 100644
+--- a/src/api/Cargo.toml
++++ b/src/api/Cargo.toml
+@@ -26,8 +26,8 @@ actix-web-httpauth = "0.8.0"
+ aes-gcm = { version = "0.10.1", optional = true }
+ anyhow.workspace = true
+ async-trait.workspace = true
+-as-types = { git = "https://github.com/confidential-containers/attestation-service.git", tag = "v0.8.0" }
+-attestation-service = { git = "https://github.com/confidential-containers/attestation-service.git", tag = "v0.8.0", default-features = false, optional = true }
++as-types = { path = "../../../attestation-service/as-types" }
++attestation-service = { path = "../../../attestation-service/attestation-service", default-features = true }
+ base64.workspace = true
+ cfg-if.workspace = true
+ clap = { version = "4.3.21", features = ["derive", "env"] }
+@@ -36,7 +36,7 @@ env_logger.workspace = true
+ jsonwebtoken = { version = "8", default-features = false, optional = true }
+ jwt-simple = "0.11.6"
+ # TODO: change it to "0.5", once released.
+-kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "c90df0e" }
++kbs-types = { path = "../../../kbs-types" }
+ lazy_static = "1.4.0"
+ log.workspace = true
+ prost = { version = "0.11", optional = true }
+diff --git a/src/api/src/attestation/coco/grpc.rs b/src/api/src/attestation/coco/grpc.rs
+index 0406e66..79f87e8 100644
+--- a/src/api/src/attestation/coco/grpc.rs
++++ b/src/api/src/attestation/coco/grpc.rs
+@@ -27,6 +27,7 @@ fn to_grpc_tee(tee: Tee) -> GrpcTee {
+     match tee {
+         Tee::AzSnpVtpm => GrpcTee::AzSnpVtpm,
+         Tee::Cca => GrpcTee::Cca,
++        Tee::Virtcca => GrpcTee::Virtcca,
+         Tee::Csv => GrpcTee::Csv,
+         Tee::Sample => GrpcTee::Sample,
+         Tee::Sev => GrpcTee::Sev,
+diff --git a/tools/client/Cargo.toml b/tools/client/Cargo.toml
+index e0345bf..8fda46e 100644
+--- a/tools/client/Cargo.toml
++++ b/tools/client/Cargo.toml
+@@ -14,14 +14,14 @@ path = "src/main.rs"
+ 
+ [dependencies]
+ # TODO: change it to "0.8.0", once released.
+-as-types = { git = "https://github.com/confidential-containers/attestation-service.git", tag = "v0.8.0", default-features = false }
++as-types = { path = "../../../attestation-service/as-types" }
+ anyhow.workspace = true
+ api-server.workspace = true
+ base64.workspace = true
+ clap = { version = "4.0.29", features = ["derive"] }
+ env_logger.workspace = true
+ jwt-simple = "0.11.4"
+-kbs_protocol = { git = "https://github.com/confidential-containers/guest-components", tag = "v0.8.0" }
++kbs_protocol = { path = "../../../guest-components/attestation-agent/kbs_protocol" }
+ log.workspace = true
+ reqwest = { version = "0.11.18", default-features = false, features = ["cookies", "json"] }
+ serde = { version = "1.0", features = ["derive"] }
+-- 
+2.33.0
+
