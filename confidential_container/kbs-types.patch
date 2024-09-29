@@ -1,0 +1,20 @@
+---
+ src/lib.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/lib.rs b/src/lib.rs
+index f6747fd..168964f 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -19,7 +19,7 @@ pub enum Tee {
+     Cca,
+     // China Secure Virtualization
+     Csv,
+-
++    Virtcca,
+     // This value is only used for testing an attestation server, and should not
+     // be used in an actual attestation scenario.
+     Sample,
+-- 
+2.33.0
+
