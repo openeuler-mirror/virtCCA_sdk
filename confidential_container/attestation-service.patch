@@ -1,0 +1,794 @@
+---
+ Cargo.toml                                    |  12 +
+ as-types/Cargo.toml                           |   4 +-
+ attestation-service/Cargo.toml                |  18 +-
+ attestation-service/src/lib.rs                |   6 +
+ attestation-service/src/verifier/mod.rs       |  19 +
+ .../src/verifier/virtcca/ima.rs               | 102 ++++
+ .../src/verifier/virtcca/mod.rs               | 470 ++++++++++++++++++
+ bin/grpc-as/src/server.rs                     |   5 +-
+ protos/attestation.proto                      |   1 +
+ 9 files changed, 630 insertions(+), 7 deletions(-)
+ create mode 100644 attestation-service/src/verifier/virtcca/ima.rs
+ create mode 100644 attestation-service/src/verifier/virtcca/mod.rs
+
+diff --git a/Cargo.toml b/Cargo.toml
+index 54cdbee..1bbb600 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -33,3 +33,15 @@ shadow-rs = "0.19.0"
+ tokio = { version = "1.0", features = ["rt-multi-thread", "macros", "fs"] }
+ tonic = "0.8.1"
+ tonic-build = "0.8.0"
++
++cose-rust = "0.1.7"
++ciborium = "0.2.2"
++hex = "0.4"
++futures = "0.3.30"
++ima-measurements = "0.2.0"
++fallible-iterator = "0.2.0"
++actix-web = "4.5"
++strum = { version = "0.25", features = ["derive"] }
++thiserror = "1.0"
++base64-url = "3.0.0"
++jsonwebtoken = "9.3.0"
+diff --git a/as-types/Cargo.toml b/as-types/Cargo.toml
+index fcdf2f6..07c928a 100644
+--- a/as-types/Cargo.toml
++++ b/as-types/Cargo.toml
+@@ -5,6 +5,8 @@ edition = "2021"
+ 
+ [dependencies]
+ # TODO: change it to "0.5", once released.
+-kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "c90df0e" }
++#kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "c90df0e" }
++kbs-types = { path = "../../kbs-types"}
++
+ serde.workspace = true
+ serde_json.workspace = true
+diff --git a/attestation-service/Cargo.toml b/attestation-service/Cargo.toml
+index 7f8670b..14897bf 100644
+--- a/attestation-service/Cargo.toml
++++ b/attestation-service/Cargo.toml
+@@ -5,13 +5,14 @@ edition = "2021"
+ 
+ [features]
+ default = [ "rvps-native", "all-verifier" ]
+-all-verifier = [ "tdx-verifier", "sgx-verifier", "snp-verifier", "az-snp-vtpm-verifier", "csv-verifier", "cca-verifier" ]
+-tdx-verifier = [ "eventlog-rs", "scroll", "sgx-dcap-quoteverify-rs" ]
+-sgx-verifier = [ "scroll", "sgx-dcap-quoteverify-rs" ]
++all-verifier = [  "snp-verifier", "az-snp-vtpm-verifier", "csv-verifier", "cca-verifier", "virtcca-verifier" ]
++#tdx-verifier = [ "eventlog-rs", "scroll", "sgx-dcap-quoteverify-rs" ]
++#sgx-verifier = [ "scroll", "sgx-dcap-quoteverify-rs" ]
+ az-snp-vtpm-verifier = [ "az-snp-vtpm", "sev" ]
+ snp-verifier = [ "asn1-rs", "openssl", "sev", "x509-parser" ]
+ csv-verifier = [ "openssl", "csv-rs", "codicon" ]
+ cca-verifier = [ "cbor-diag", "veraison-apiclient" ]
++virtcca-verifier = ["openssl"]
+ 
+ rvps-native = []
+ rvps-grpc = [ "tonic" ]
+@@ -20,6 +21,12 @@ rvps-grpc = [ "tonic" ]
+ anyhow.workspace = true
+ asn1-rs = { version = "0.5.1", optional = true }
+ async-trait.workspace = true
++
++cose-rust.workspace = true
++ciborium.workspace = true
++ima-measurements.workspace = true
++fallible-iterator.workspace = true
++
+ as-types = { path = "../as-types" }
+ az-snp-vtpm = { version = "0.3.0", default-features = false, features = ["verifier"], optional = true }
+ base64 = "0.21"
+@@ -37,7 +44,9 @@ hex = "0.4.3"
+ jsonwebtoken = "8"
+ jwt = { version = "0.16.0", features = ["openssl"]}
+ # TODO: change it to "0.5", once released.
+-kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "c90df0e" }
++#kbs-types = { git = "https://github.com/virtee/kbs-types", rev = "c90df0e" }
++kbs-types = { path = "../../kbs-types"}
++
+ lazy_static = "1.4.0"
+ log.workspace = true
+ openssl = { version = "0.10.55", optional = true }
+@@ -65,6 +74,7 @@ veraison-apiclient = { git = "https://github.com/chendave/rust-apiclient", branc
+ ear = { git = "https://github.com/veraison/rust-ear", rev = "cc6ea53" }
+ x509-parser = { version = "0.14.0", optional = true }
+ 
++
+ [build-dependencies]
+ shadow-rs.workspace = true
+ tonic-build.workspace = true
+diff --git a/attestation-service/src/lib.rs b/attestation-service/src/lib.rs
+index 144b6b4..a5756a5 100644
+--- a/attestation-service/src/lib.rs
++++ b/attestation-service/src/lib.rs
+@@ -23,6 +23,9 @@ pub mod verifier;
+ 
+ use crate::token::AttestationTokenBroker;
+ 
++
++use log::{debug, info};
++
+ use anyhow::{anyhow, Context, Result};
+ use as_types::SetPolicyInput;
+ use config::Config;
+@@ -112,6 +115,9 @@ impl AttestationService {
+     /// Evaluate Attestation Evidence.
+     /// Issue an attestation results token which contain TCB status and TEE public key.
+     pub async fn evaluate(&self, tee: Tee, nonce: &str, attestation: &str) -> Result<String> {
++        // info!("evaluate tee: {}", tee.clone());
++        info!("evaluate {}", nonce);
++
+         let attestation = serde_json::from_str::<Attestation>(attestation)
+             .context("Failed to deserialize Attestation")?;
+         let verifier = crate::verifier::to_verifier(&tee)?;
+diff --git a/attestation-service/src/verifier/mod.rs b/attestation-service/src/verifier/mod.rs
+index 1393711..3396630 100644
+--- a/attestation-service/src/verifier/mod.rs
++++ b/attestation-service/src/verifier/mod.rs
+@@ -3,6 +3,8 @@ use as_types::TeeEvidenceParsedClaim;
+ use async_trait::async_trait;
+ use kbs_types::{Attestation, Tee};
+ 
++pub type TeeClaim = serde_json::Value;
++
+ pub mod sample;
+ 
+ #[cfg(feature = "az-snp-vtpm-verifier")]
+@@ -23,8 +25,13 @@ pub mod csv;
+ #[cfg(feature = "cca-verifier")]
+ pub mod cca;
+ 
++#[cfg(feature = "virtcca-verifier")]
++pub mod virtcca;
++
+ pub(crate) fn to_verifier(tee: &Tee) -> Result<Box<dyn Verifier + Send + Sync>> {
++
+     match tee {
++
+         Tee::Sev => todo!(),
+         Tee::AzSnpVtpm => {
+             cfg_if::cfg_if! {
+@@ -83,6 +90,18 @@ pub(crate) fn to_verifier(tee: &Tee) -> Result<Box<dyn Verifier + Send + Sync>>
+                 }
+             }
+         }
++
++
++        Tee::Virtcca => {
++            cfg_if::cfg_if! {
++                if #[cfg(feature = "virtcca-verifier")] {
++                    Ok(Box::<virtcca::VirtCCAVerifier>::default() as Box<dyn Verifier + Send + Sync>)
++                } else {
++                    anyhow::bail!("feature `cca-verifier` is not enabled!");
++                }
++            }
++        }
++
+     }
+ }
+ 
+diff --git a/attestation-service/src/verifier/virtcca/ima.rs b/attestation-service/src/verifier/virtcca/ima.rs
+new file mode 100644
+index 0000000..eae1fd1
+--- /dev/null
++++ b/attestation-service/src/verifier/virtcca/ima.rs
+@@ -0,0 +1,102 @@
++use anyhow::{Result, bail};
++use ima_measurements::{Event, EventData, Parser};
++use fallible_iterator::FallibleIterator;
++use std::fs;
++use std::process::Command;
++use serde_json::Value;
++use rand::Rng;
++use serde::Serialize;
++use serde::Deserialize;
++// use attester::Evidence;
++// pub use attester::virtcca::VirtccaEvidence;
++
++#[derive(Debug)]
++pub struct ImaVerify {
++    log_path: String,
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct VirtccaEvidence {
++    pub evidence: Vec<u8>,
++    pub dev_cert: Vec<u8>,
++    pub ima_log: Option<Vec<u8>>,
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct Evidence {
++    pub tee: TeeType,
++    pub evidence: String,
++}
++
++#[derive(Debug, Serialize, Deserialize)]
++pub enum TeeType {
++    Itrustee = 1,
++    Virtcca,
++    Invalid,
++}
++
++impl Default for ImaVerify {
++    fn default() -> Self {
++        let mut rng = rand::thread_rng();
++        let n: u64 = rng.gen();
++        ImaVerify {
++            // log_path: format!("/tmp/attestation-service/ima-log-{}", n),  // todo fs::write depends attestation-service dir exist
++            log_path: format!("/tmp/ima-log-{}", n),
++        }
++    }
++}
++
++impl ImaVerify {
++    // todo return detail verify result list with policy
++    pub fn ima_verify(&self, evidence: &[u8], claim: &Value, digest_list_file: String) -> Result<()> {
++        let aa_evidence: Evidence = serde_json::from_slice(evidence)?;
++        let evidence = aa_evidence.evidence.as_bytes();
++        let virtcca_ev: VirtccaEvidence = serde_json::from_slice(evidence)?;
++        let ima_log = match virtcca_ev.ima_log {
++            Some(ima_log) => ima_log,
++            _ => {log::info!("no ima log"); return Ok(())},
++        };
++
++        fs::write(&self.log_path, &ima_log).expect("write img log failed");
++        let f = fs::File::open(&self.log_path).expect("ima log file not found");
++
++        let claim_ima_log_hash = claim["payload"]["cvm"]["rem"][0].clone();
++        let mut parser = Parser::new(f);
++
++        let mut events: Vec<Event> = Vec::new();
++        while let Some(event) = parser.next()? {
++            events.push(event);
++        }
++
++        let pcr_values = parser.pcr_values();
++        let pcr_10 = pcr_values.get(&10).expect("PCR 10 not measured");
++        let string_pcr_sha256 = hex::encode(pcr_10.sha256);
++
++        if Value::String(string_pcr_sha256.clone()) != claim_ima_log_hash {
++            log::error!("ima log verify failed string_pcr_sha256 {}, string_claim_ima_log_hash {}", string_pcr_sha256, claim_ima_log_hash);
++            bail!("ima log hash verify failed");
++        }
++
++        // parser each file digest in ima log, and compare with reference base value
++        for event in events {
++            let file_digest = match event.data {
++                EventData::ImaNg{digest, name} => {drop(name); digest.digest},
++                _ => bail!("Inalid event {:?}", event),
++            };
++            let hex_str_digest = hex::encode(file_digest);
++            //log::info!("hex_str_digest {}", hex_str_digest);
++            let output = Command::new("grep")
++                .arg("-E")
++                .arg("-i")
++                .arg(&hex_str_digest)
++                .arg(&digest_list_file)
++                .output()?;
++            if output.stdout.is_empty() {
++                log::error!("there is no refernce base value of file digest {:?}", hex_str_digest);
++            }
++        }
++
++        Ok(())
++    }
++}
++
+diff --git a/attestation-service/src/verifier/virtcca/mod.rs b/attestation-service/src/verifier/virtcca/mod.rs
+new file mode 100644
+index 0000000..12558fe
+--- /dev/null
++++ b/attestation-service/src/verifier/virtcca/mod.rs
+@@ -0,0 +1,470 @@
++/*
++ * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
++ * secGear is licensed under the Mulan PSL v2.
++ * You can use this software according to the terms and conditions of the Mulan PSL v2.
++ * You may obtain a copy of Mulan PSL v2 at:
++ *     http://license.coscl.org.cn/MulanPSL2
++ * THIS SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR
++ * IMPLIED, INCLUDING BUT NOT LIMITED TO NON-INFRINGEMENT, MERCHANTABILITY OR FIT FOR A PARTICULAR
++ * PURPOSE.
++ * See the Mulan PSL v2 for more details.
++ */
++
++//! virtcca verifier plugin
++use crate::verifier::{TeeClaim, Verifier, Attestation, TeeEvidenceParsedClaim};
++
++use anyhow::{Result, bail, anyhow, Context};
++use async_trait::async_trait;
++use cose::keys::CoseKey;
++use cose::message::CoseMessage;
++use ciborium;
++use ciborium::Value;
++use openssl::rsa;
++use openssl::pkey::Public;
++use openssl::x509;
++use openssl::pkey::PKey;
++use log;
++use serde_json::json;
++use kbs_types::TeePubKey;
++use serde::Serialize;
++use serde::Deserialize;
++use base64::decode;
++// use anyhow::{bail, Context};
++
++pub mod ima;
++
++const VIRTCCA_ROOT_CERT: &str = "/etc/attestation/attestation-service/verifier/virtcca/Huawei Equipment Root CA.pem";
++const VIRTCCA_SUB_CERT: &str = "/etc/attestation/attestation-service/verifier/virtcca/Huawei IT Product CA.pem";
++
++const VIRTCCA_REF_VALUE_FILE: &str = "/etc/attestation/attestation-service/verifier/virtcca/ref_value.json";
++
++#[derive(Debug, Default)]
++pub struct VirtCCAVerifier {}
++
++#[async_trait]
++impl Verifier for VirtCCAVerifier {
++    async fn evaluate(
++        &self,
++        nonce: String,
++        attestation: &Attestation,
++    ) -> Result<TeeEvidenceParsedClaim> {
++        return Evidence::verify(nonce, attestation);
++    }
++}
++
++const CBOR_TAG: u64 = 399;
++const CVM_LABEL: i128 = 44241;
++
++const CVM_CHALLENGE_LABEL: i128 = 10;
++const CVM_RPV_LABEL: i128 = 44235;
++const CVM_RIM_LABEL: i128 = 44238;
++const CVM_REM_LABEL: i128 = 44239;
++const CVM_HASH_ALG_LABEL: i128 = 44236;
++const CVM_PUB_KEY_LABEL: i128 = 44237;
++const CVM_PUB_KEY_HASH_ALG_LABEL: i128 = 44240;
++
++const CVM_CHALLENGE_SIZE: usize = 64;
++const CVM_RPV_SIZE: usize = 64;
++const CVM_REM_ARR_SIZE: usize = 4;
++const CVM_PUB_KEY_SIZE: usize = 550;
++
++#[derive(Debug, Serialize, Deserialize)]
++pub struct VirtccaEvidence {
++    pub evidence: Vec<u8>,
++    pub dev_cert: Vec<u8>,
++    pub ima_log: Option<Vec<u8>>,
++}
++#[derive(Debug)]
++pub struct CvmToken {
++    pub challenge: [u8; CVM_CHALLENGE_SIZE],        //    10 => bytes .size 64
++    pub rpv: [u8; CVM_RPV_SIZE],                    // 44235 => bytes .size 64
++    pub rim: Vec<u8>,                               // 44238 => bytes .size {32,48,64}
++    pub rem: [Vec<u8>; CVM_REM_ARR_SIZE],           // 44239 => [ 4*4 bytes .size {32,48,64} ]
++    pub hash_alg: String,                           // 44236 => text
++    pub pub_key: [u8; CVM_PUB_KEY_SIZE],            // 44237 => bytes .size 550
++    pub pub_key_hash_alg: String,                   // 44240 => text
++}
++
++pub struct Evidence {
++    /// COSE Sign1 envelope for cvm_token
++    pub cvm_envelop: CoseMessage,
++    /// Decoded cvm token
++    pub cvm_token: CvmToken,
++}
++
++impl Evidence {
++    pub fn new() -> Self {
++        Self {
++            cvm_envelop: CoseMessage::new_sign(),
++            cvm_token: CvmToken::new(),
++        }
++    }
++
++    pub fn verify(nonce: String, attestation: &Attestation) -> Result<TeeClaim> {
++        log::info!("verify virtCCA tee_evidence!");
++        // 尝试将 attestation.tee_evidence 转换为 &str 类型
++        let evidence_str = Some(attestation.tee_evidence.as_str()).ok_or_else(|| {
++            anyhow!("Failed to convert attestation.tee_evidence to &str")
++        })?;
++
++        log::info!("tee_evidence {}", attestation.tee_evidence.as_str());
++        // 反序列化 VirtccaEvidence 从 evidence_str
++        let virtcca_ev: VirtccaEvidence = serde_json::from_str::<VirtccaEvidence>(evidence_str)
++            .context("Deserialize VirtccaEvidence failed.")?;
++
++        // 从 VirtccaEvidence 中提取 evidence 和 dev_cert
++        let evidence = virtcca_ev.evidence;
++        let dev_cert = virtcca_ev.dev_cert;
++
++        // 将提取出来的 evidence 数据解码为 Evidence 对象
++        let mut evidence = Evidence::decode(evidence)
++            .context("Failed to decode evidence")?;
++
++        // 验证平台证书
++        evidence.verify_platform_token(&dev_cert)
++            .context("Failed to verify platform token")?;
++
++        // 验证 CVM token，包括 nonce 和 evidence 的验证
++        evidence.verify_cvm_token(nonce.as_bytes())
++            .context("Failed to verify CVM token")?;
++
++        // 从 evidence 中提取并解析 TeeClaim
++        let tee_claim = evidence.parse_claim_from_evidence()
++            .context("Failed to parse claim from evidence")?;
++
++        // 可能需要将 TeeClaim 转换为 TeeEvidenceParsedClaim
++        Ok(tee_claim as TeeEvidenceParsedClaim)
++    }
++
++    fn parse_claim_from_evidence(&self) -> Result<TeeClaim> {
++        let payload = json!({
++            "cvm": {
++                "challenge": hex::encode(self.cvm_token.challenge.clone()),
++                "rpv": hex::encode(self.cvm_token.rpv.clone()),
++                "rim": hex::encode(self.cvm_token.rim.clone()),
++                "rem": [
++                    hex::encode(self.cvm_token.rem[0].clone()),
++                    hex::encode(self.cvm_token.rem[1].clone()),
++                    hex::encode(self.cvm_token.rem[2].clone()),
++                    hex::encode(self.cvm_token.rem[3].clone())
++                ],
++            },
++            "platform" : {
++                // todo
++            }
++        });
++        let claim = json!({
++            "tee": "virtcca",
++            "payload" : payload,
++        });
++        Ok(claim as TeeClaim)
++    }
++    fn verify_platform_token(&mut self, dev_cert: &[u8]) -> Result<()> {
++        // todo verify platform COSE_Sign1 by dev_cert, virtCCA report has no platform token now
++
++        // verify dev_cet by cert chain
++        Evidence::verify_dev_cert_chain(dev_cert)?;
++        Ok(())
++    }
++    // TODO: verify cert chain, now only verify signature
++    fn verify_dev_cert_chain(dev_cert: &[u8]) -> Result<()> {
++        let dev_cert = x509::X509::from_der(dev_cert)?;
++        let sub_cert_file = std::fs::read(VIRTCCA_SUB_CERT)?;
++        let sub_cert = x509::X509::from_pem(&sub_cert_file)?;
++        let root_cert_file = std::fs::read(VIRTCCA_ROOT_CERT)?;
++        let root_cert = x509::X509::from_pem(&root_cert_file)?;
++
++        // verify dev_cert by sub_cert
++        let ret = dev_cert.verify(&(sub_cert.public_key()? as PKey<Public>))?;
++        if !ret {
++            log::error!("verify dev cert by sub cert failed");
++            bail!("verify dev cert by sub cert failed");
++        }
++        // verify sub_cert by root_cert
++        let ret = sub_cert.verify(&(root_cert.public_key()? as PKey<Public>))?;
++        if !ret {
++            log::error!("verify sub cert by root cert failed");
++            bail!("verify sub cert by root cert failed");
++        }
++        // verify self signed root_cert
++        let ret = root_cert.verify(&(root_cert.public_key()? as PKey<Public>))?;
++        if !ret {
++            log::error!("verify self signed root cert failed");
++            bail!("verify self signed root cert failed");
++        }
++        Ok(())
++    }
++    fn verify_cvm_token(&mut self, challenge: &[u8]) -> Result<()> {
++
++        let decode_challenge = base64::decode(&challenge).map_err(|e| anyhow!("failed to encode challenge {}", e.to_string()))?;
++        // verify challenge
++        let len = decode_challenge.len();
++        let token_challenge = &self.cvm_token.challenge[0..len];
++        log::info!("decode_challenge111 {:?} len{}", decode_challenge, decode_challenge.len());
++
++        if decode_challenge != token_challenge {
++            log::error!(
++                "verify cvm token challenge error, cvm_token challenge {:?}, input challenge {:?}",
++                token_challenge, decode_challenge
++            );
++            bail!(
++                "verify cvm token challenge error, cvm_token challenge {:?}, input challenge {:?}",
++                token_challenge,
++                decode_challenge
++            );
++        }
++
++        // todo verify cvm pubkey by platform.challenge, virtCCA report has no platform token now
++
++        // verify COSE_Sign1 signature begin
++        let raw_pub_key = self.cvm_token.pub_key;
++        let mut cose_key: CoseKey = Evidence::from_raw_pub_key(&raw_pub_key)?;
++        cose_key.key_ops(vec![cose::keys::KEY_OPS_VERIFY]);
++        match self.cvm_envelop.header.alg {
++            Some(alg) => cose_key.alg(alg),
++            None => bail!("cose sign verify alg is none"),
++        }
++        self.cvm_envelop.key(&cose_key).map_err(|err| anyhow!("set cose_key to COSE_Sign1 envelop failed: {err:?}"))?;
++        self.cvm_envelop.decode(None, None).map_err(|err| anyhow!("verify COSE_Sign1 signature failed:{err:?}"))?;
++        // verify COSE_Sign1 signature end
++
++        // verfiy cvm token with reference value
++        self.compare_with_ref()?;
++
++        Ok(())
++    }
++
++    fn compare_with_ref(&mut self) -> Result<()> {
++        let ref_file = std::fs::read(VIRTCCA_REF_VALUE_FILE)?;
++        let js_ref = serde_json::from_slice(&ref_file)?;
++        match js_ref {
++            serde_json::Value::Object(obj) => {
++                for (k, v) in obj {
++                    if k == "rim" {
++                        let rim_ref = match v {
++                            serde_json::Value::String(rim) => rim,
++                            _ => bail!("tim ref expecting String"),
++                        };
++                        let rim = hex::encode(self.cvm_token.rim.clone());
++                        if rim_ref != rim {
++                            log::error!("expecting rim: {}, got: {}", rim_ref, rim);
++                            bail!("expecting rim: {}, got: {}", rim_ref, rim);
++                        }
++                    }
++                }
++            }
++            _ => bail!("invalid json ref value"),
++        }
++
++        Ok(())
++    }
++    fn from_raw_pub_key(raw_pub_key: &[u8]) -> Result<CoseKey> {
++        let pub_key: rsa::Rsa<Public> = rsa::Rsa::public_key_from_der(raw_pub_key)?;
++        let mut cose_key = CoseKey::new();
++        cose_key.kty(cose::keys::RSA);
++        cose_key.e(pub_key.e().to_vec());
++        cose_key.n(pub_key.n().to_vec());
++
++        Ok(cose_key)
++    }
++    pub fn decode(raw_evidence: Vec<u8>) -> Result<Evidence> {
++        let mut evidence: Evidence = Evidence::new();
++
++        // decode CBOR evidence to ciborium Value
++        let val: Value = ciborium::de::from_reader(raw_evidence.as_slice())?;
++        log::debug!("[debug] decode CBOR virtcca token to ciborium Value:{:?}", val);
++        if let Value::Tag(t, m) = val {
++            if t != CBOR_TAG {
++                log::error!("input evidence error, expecting tag {}, got {}", CBOR_TAG, t);
++                bail!("input evidence error, expecting tag {}, got {}", CBOR_TAG, t);
++            }
++            if let Value::Map(contents) = *m {
++                for (k, v) in contents.iter() {
++                    if let Value::Integer(i) = k {
++                        match (*i).into() {
++                            CVM_LABEL => evidence.set_cvm_token(v)?,
++                            err => bail!("unknown label {}", err),
++                        }
++                    } else {
++                        bail!("expecting integer key");
++                    }
++                }
++            } else {
++                bail!("expecting map type");
++            }
++        } else {
++            bail!("expecting tag type");
++        }
++
++        let ret = evidence.cvm_envelop.init_decoder(None);
++        match ret {
++            Ok(_) => log::info!("decode COSE success"),
++            Err(e) => {
++                log::error!("decode COSE failed, {:?}", e);
++                bail!("decode COSE failed");
++            },
++        }
++
++        // decode cvm CBOR payload
++        evidence.cvm_token = CvmToken::decode(&evidence.cvm_envelop.payload)?;
++        Ok(evidence)
++    }
++    fn set_cvm_token(&mut self, v: &Value) -> Result<()> {
++        let tmp = v.as_bytes();
++        if tmp.is_none() {
++            log::error!("cvm token is none");
++            bail!("cvm token is none");
++        }
++        self.cvm_envelop.bytes = tmp.unwrap().clone();
++        Ok(())
++    }
++}
++
++impl CvmToken {
++    pub fn new() -> Self {
++        Self {
++            challenge: [0; CVM_CHALLENGE_SIZE],
++            rpv: [0; CVM_RPV_SIZE],
++            rim: vec![0, 64],
++            rem: Default::default(),
++            hash_alg: String::from(""),
++            pub_key: [0; CVM_PUB_KEY_SIZE],
++            pub_key_hash_alg: String::from(""),
++        }
++    }
++    pub fn decode(raw_payload: &Vec<u8>) -> Result<CvmToken> {
++        let payload: Vec<u8> = ciborium::de::from_reader(raw_payload.as_slice())?;
++        log::debug!("After decode CBOR payload, payload {:?}", payload);
++        let payload: Value = ciborium::de::from_reader(payload.as_slice())?;
++        log::debug!("After decode CBOR payload again, payload {:?}", payload);
++        let mut cvm_token: CvmToken = CvmToken::new();
++        if let Value::Map(contents) = payload {
++            for (k, v) in contents.iter() {
++                if let Value::Integer(i) = k {
++                    match (*i).into() {
++                        CVM_CHALLENGE_LABEL => cvm_token.set_challenge(v)?,
++                        CVM_RPV_LABEL => cvm_token.set_rpv(v)?,
++                        CVM_RIM_LABEL => cvm_token.set_rim(v)?,
++                        CVM_REM_LABEL => cvm_token.set_rem(v)?,
++                        CVM_HASH_ALG_LABEL => cvm_token.set_hash_alg(v)?,
++                        CVM_PUB_KEY_LABEL => cvm_token.set_pub_key(v)?,
++                        CVM_PUB_KEY_HASH_ALG_LABEL => cvm_token.set_pub_key_hash_alg(v)?,
++                        err => bail!("cvm payload unkown label {}", err),
++                    }
++                } else {
++                    bail!("cvm payload expecting integer key");
++                }
++            }
++        } else {
++            bail!("expecting cvm payload map type");
++        }
++        log::debug!("cvm_token decode from raw payload, {:?}", cvm_token);
++        Ok(cvm_token)
++    }
++    fn set_challenge(&mut self, v: &Value) -> Result<()> {
++        let tmp = v.as_bytes();
++        if tmp.is_none() {
++            bail!("cvm token challenge is none");
++        }
++        let tmp = tmp.unwrap().clone();
++        if tmp.len() != CVM_CHALLENGE_SIZE {
++            bail!("cvm token challenge expecting {} bytes, got {}", CVM_CHALLENGE_SIZE, tmp.len());
++        }
++        self.challenge[..].clone_from_slice(&tmp);
++        Ok(())
++    }
++    fn set_rpv(&mut self, v: &Value) -> Result<()> {
++        let tmp = v.as_bytes();
++        if tmp.is_none() {
++            bail!("cvm token rpv is none");
++        }
++        let tmp = tmp.unwrap().clone();
++        if tmp.len() != CVM_RPV_SIZE {
++            bail!("cvm token rpv expecting {} bytes, got {}", CVM_RPV_SIZE, tmp.len());
++        }
++        self.rpv[..].clone_from_slice(&tmp);
++        Ok(())
++    }
++    fn get_measurement(v: &Value, who: &str) -> Result<Vec<u8>> {
++        let tmp = v.as_bytes();
++        if tmp.is_none() {
++            bail!("cvm token {} is none", who);
++        }
++        let tmp = tmp.unwrap().clone();
++        if !matches!(tmp.len(), 32 | 48 | 64) {
++            bail!("cvm token {} expecting 32, 48 or 64 bytes, got {}", who, tmp.len());
++        }
++        Ok(tmp)
++    }
++    fn set_rim(&mut self, v: &Value) -> Result<()> {
++        self.rim = Self::get_measurement(v, "rim")?;
++        Ok(())
++    }
++    fn set_rem(&mut self, v: &Value) -> Result<()> {
++        let tmp = v.as_array();
++        if tmp.is_none() {
++            bail!("cvm token rem is none");
++        }
++        let tmp = tmp.unwrap().clone();
++        if tmp.len() != 4 {
++            bail!("cvm token rem expecting size {}, got {}", CVM_REM_ARR_SIZE, tmp.len());
++        }
++
++        for (i, val) in tmp.iter().enumerate() {
++            self.rem[i] = Self::get_measurement(val, "rem[{i}]")?;
++        }
++        Ok(())
++    }
++    fn get_hash_alg(v: &Value, who: &str) -> Result<String> {
++        let alg = v.as_text();
++        if alg.is_none() {
++            bail!("{} hash alg must be str", who);
++        }
++        Ok(alg.unwrap().to_string())
++    }
++    fn set_hash_alg(&mut self, v: &Value) -> Result<()> {
++        self.hash_alg = Self::get_hash_alg(v, "cvm token")?;
++        Ok(())
++    }
++    fn set_pub_key(&mut self, v: &Value) -> Result<()> {
++        let tmp = v.as_bytes();
++        if tmp.is_none() {
++            bail!("cvm token pub key is none");
++        }
++        let tmp = tmp.unwrap().clone();
++        if tmp.len() != CVM_PUB_KEY_SIZE {
++            bail!("cvm token pub key len expecting {}, got {}", CVM_PUB_KEY_SIZE, tmp.len());
++        }
++        self.pub_key[..].clone_from_slice(&tmp);
++        Ok(())
++    }
++    fn set_pub_key_hash_alg(&mut self, v: &Value) -> Result<()> {
++        self.pub_key_hash_alg = Self::get_hash_alg(v, "pub key")?;
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use hex;
++
++    const TEST_VIRTCCA_TOKEN: &[u8; 2862] = include_bytes!("../../test_data/virtcca.cbor");
++    #[test]
++    fn decode_token() {
++        let token = hex::decode(TEST_VIRTCCA_TOKEN).unwrap();
++        let dev_cert = std::fs::read("./test_data/virtcca_aik_cert.der").unwrap();
++        let challenge = Vec::new();
++        let virtcca_ev = VirtccaEvidence {
++            evidence: token.to_vec(),
++            dev_cert: dev_cert,
++            ima_log: None,
++        };
++        let virtcca_ev = serde_json::to_vec(&virtcca_ev).unwrap();
++        let r = Evidence::verify(&challenge, &virtcca_ev);
++        match r {
++            Ok(claim) => println!("verify success {:?}", claim),
++            Err(e) => assert!(false, "verify failed {:?}", e),
++        }
++    }
++}
+diff --git a/bin/grpc-as/src/server.rs b/bin/grpc-as/src/server.rs
+index a382359..54e8d4f 100644
+--- a/bin/grpc-as/src/server.rs
++++ b/bin/grpc-as/src/server.rs
+@@ -30,6 +30,7 @@ fn to_kbs_tee(tee: GrpcTee) -> Tee {
+         GrpcTee::Snp => Tee::Snp,
+         GrpcTee::Tdx => Tee::Tdx,
+         GrpcTee::Csv => Tee::Csv,
++        GrpcTee::Virtcca => Tee::Virtcca,
+         GrpcTee::Sample => Tee::Sample,
+     }
+ }
+@@ -91,8 +92,8 @@ impl AttestationService for Arc<RwLock<AttestationServer>> {
+         request: Request<AttestationRequest>,
+     ) -> Result<Response<AttestationResponse>, Status> {
+         let request: AttestationRequest = request.into_inner();
+-
+-        debug!("Evidence: {}", &request.evidence);
++        //request.tee
++        debug!("attestation_evaluate: evidence {} ,tee {}, nonce {}", &request.evidence, request.tee, request.nonce);
+ 
+         let attestation_token = self
+             .read()
+diff --git a/protos/attestation.proto b/protos/attestation.proto
+index 4602f3a..f6070ca 100644
+--- a/protos/attestation.proto
++++ b/protos/attestation.proto
+@@ -9,6 +9,7 @@ enum Tee {
+     TDX = 3;
+     Sample = 4;
+     CSV = 6;
++    Virtcca = 8;
+ }
+ 
+ message AttestationRequest {
+-- 
+2.21.0.windows.1
+
