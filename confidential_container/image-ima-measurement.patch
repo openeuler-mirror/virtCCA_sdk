@@ -1,0 +1,271 @@
+---
+ image-rs/Cargo.toml   |   5 ++
+ image-rs/src/image.rs |  14 +++++
+ image-rs/src/pull.rs  | 117 ++++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 131 insertions(+), 5 deletions(-)
+
+diff --git a/image-rs/Cargo.toml b/image-rs/Cargo.toml
+index 9d44184..617a745 100644
+--- a/image-rs/Cargo.toml
++++ b/image-rs/Cargo.toml
+@@ -25,6 +25,11 @@ hex = { workspace = true, optional = true }
+ lazy_static = { workspace = true, optional = true }
+ libc = "0.2"
+ log = "0.4.14"
++slog = "2.5.2"
++slog-scope = "4.1.2"
++slog-async = "2.7"
++slog-term = "2.9.0"
++slog-stdlog = "4.0.0"
+ loopdev = { git = "https://github.com/mdaffin/loopdev", rev = "c9f91e8f0326ce8a3364ac911e81eb32328a5f27"}
+ nix = { version = "0.26", optional = true }
+ oci-distribution = { git = "https://github.com/krustlet/oci-distribution.git", rev = "f44124c", default-features = false, optional = true }
+diff --git a/image-rs/src/image.rs b/image-rs/src/image.rs
+index 1a747ae..4bd1a4b 100644
+--- a/image-rs/src/image.rs
++++ b/image-rs/src/image.rs
+@@ -4,6 +4,7 @@
+ 
+ use anyhow::{anyhow, bail, Result};
+ use log::warn;
++use slog::{Drain,Logger,o};
+ use oci_distribution::manifest::{OciDescriptor, OciImageManifest};
+ use oci_distribution::secrets::RegistryAuth;
+ use oci_distribution::Reference;
+@@ -56,6 +57,9 @@ pub struct LayerMeta {
+ 
+     /// The image layer storage path.
+     pub store_path: String,
++
++    /// The original tar file path.
++    pub original_tar_path: String,
+ }
+ 
+ /// The metadata info for container image.
+@@ -92,6 +96,9 @@ pub struct ImageClient {
+ 
+     /// The supported snapshots for `image-rs` client.
+     pub snapshots: HashMap<SnapshotType, Box<dyn Snapshotter>>,
++
++    /// The logger for `image-rs` client.
++    pub logger: Logger,
+ }
+ 
+ impl Default for ImageClient {
+@@ -138,10 +145,16 @@ impl Default for ImageClient {
+             );
+         }
+ 
++        let decorator = slog_term::PlainDecorator::new(std::io::stdout());
++        let drain = slog_term::FullFormat::new(decorator).build().fuse();
++        let drain = slog_async::Async::new(drain).build().fuse();
++        let logger = slog::Logger::root(drain, o!("module" => "image-client"));
++
+         ImageClient {
+             config,
+             meta_store: Arc::new(Mutex::new(meta_store)),
+             snapshots,
++            logger,
+         }
+     }
+ }
+@@ -238,6 +251,7 @@ impl ImageClient {
+             &self.config.work_dir.join("layers"),
+             &auth,
+             self.config.max_concurrent_download,
++            self.logger.clone(),
+         )?;
+         let (image_manifest, image_digest, image_config) = client.pull_manifest().await?;
+ 
+diff --git a/image-rs/src/pull.rs b/image-rs/src/pull.rs
+index b555b23..743d9b6 100644
+--- a/image-rs/src/pull.rs
++++ b/image-rs/src/pull.rs
+@@ -9,7 +9,13 @@ use oci_distribution::{secrets::RegistryAuth, Client, Reference};
+ use std::convert::TryFrom;
+ use std::path::{Path, PathBuf};
+ use std::sync::Arc;
++use tokio::io::{AsyncWriteExt, AsyncReadExt, BufReader, AsyncSeekExt};
++use tokio::fs::File;
+ use tokio::sync::Mutex;
++use std::io::Cursor;
++use slog::{debug, error, info, Logger};
++use nix::unistd::{chown};
++use sha2::{Sha256, Digest};
+ 
+ use crate::decoder::Compression;
+ use crate::decrypt::Decryptor;
+@@ -36,6 +42,12 @@ pub struct PullClient<'a> {
+ 
+     /// Max number of concurrent downloads.
+     pub max_concurrent_download: usize,
++
++    /// Original tar files store dir.
++    pub original_tar_dir: PathBuf,
++
++    /// Logger for logging messages.
++    pub logger: Logger,
+ }
+ 
+ impl<'a> PullClient<'a> {
+@@ -46,6 +58,7 @@ impl<'a> PullClient<'a> {
+         data_dir: &Path,
+         auth: &'a RegistryAuth,
+         max_concurrent_download: usize,
++        logger: Logger,
+     ) -> Result<PullClient<'a>> {
+         let client = Client::default();
+ 
+@@ -55,6 +68,8 @@ impl<'a> PullClient<'a> {
+             reference,
+             data_dir: data_dir.to_path_buf(),
+             max_concurrent_download,
++            original_tar_dir: data_dir.join("original_tars"),
++            logger,
+         })
+     }
+ 
+@@ -100,11 +115,15 @@ impl<'a> PullClient<'a> {
+                 let ms = meta_store.clone();
+ 
+                 async move {
+-                    let layer_reader = client
++                    let mut layer_reader = client
+                         .async_pull_blob(reference, &layer.digest)
+                         .await
+                         .map_err(|e| anyhow!("failed to async pull blob {}", e.to_string()))?;
+ 
++                    let mut buffer = Vec::new();
++                    layer_reader.read_to_end(&mut buffer).await?;
++                    let layer_reader = Cursor::new(buffer);
++
+                     self.async_handle_layer(
+                         layer,
+                         diff_ids[i].clone(),
+@@ -112,8 +131,8 @@ impl<'a> PullClient<'a> {
+                         layer_reader,
+                         ms,
+                     )
+-                    .await
+-                    .map_err(|e| anyhow!("failed to handle layer: {:?}", e))
++                        .await
++                        .map_err(|e| anyhow!("failed to handle layer: {:?}", e))
+                 }
+             })
+             .buffer_unordered(self.max_concurrent_download)
+@@ -128,22 +147,110 @@ impl<'a> PullClient<'a> {
+         layer: OciDescriptor,
+         diff_id: String,
+         decrypt_config: &Option<&str>,
+-        layer_reader: (impl tokio::io::AsyncRead + Unpin + Send),
++        layer_reader: Cursor<Vec<u8>>,
+         ms: Arc<Mutex<MetaStore>>,
+     ) -> Result<LayerMeta> {
++        debug!(self.logger, "Starting to handle layer";
++            "layer_digest" => %layer.digest,
++            "diff_id" => %diff_id
++        );
++
+         let layer_db = &ms.lock().await.layer_db;
+         if let Some(layer_meta) = layer_db.get(&layer.digest) {
++            info!(self.logger, "Layer already exists in database"; "layer_digest" => %layer.digest);
+             return Ok(layer_meta.clone());
+         }
+ 
+         let blob_id = layer.digest.to_string().replace(':', "_");
+-        let destination = self.data_dir.join(blob_id);
++        let destination = self.data_dir.join(&blob_id);
++        let original_tar_path = self.original_tar_dir.join(&blob_id).with_extension("tar");
++        debug!(self.logger, "Layer paths";
++            "destination" => %destination.display(),
++            "original_tar_path" => %original_tar_path.display()
++        );
++
+         let mut layer_meta = LayerMeta {
+             compressed_digest: layer.digest.clone(),
+             store_path: destination.display().to_string(),
++            original_tar_path: original_tar_path.display().to_string(),
+             ..Default::default()
+         };
+ 
++        // Ensure that the original tar directory exists.
++        tokio::fs::create_dir_all(&self.original_tar_dir).await?;
++        debug!(self.logger, "Created original tar directory"; "path" => %self.original_tar_dir.display());
++
++        // Save the original tar file.
++        let mut original_tar_file = tokio::fs::File::create(&original_tar_path).await?;
++        let mut layer_reader = BufReader::new(layer_reader);
++        let bytes_copied = tokio::io::copy(&mut layer_reader, &mut original_tar_file).await?;
++        // Explicitly flushing and closing files
++        original_tar_file.flush().await?;
++        drop(original_tar_file);
++
++        info!(self.logger, "Saved and closed original tar file";
++            "path" => %original_tar_path.display(),
++            "bytes" => bytes_copied
++        );
++
++        // Change the file ownership to the "mirror" user.
++        let username = "mirror";
++        match nix::unistd::User::from_name(username) {
++            Ok(Some(user)) => {
++                let uid = user.uid;
++                let gid = user.gid;
++                match chown(&original_tar_path, Some(uid), Some(gid)) {
++                    Ok(_) => {
++                        info!(self.logger, "Changed ownership of tar file";
++                            "path" => %original_tar_path.display(),
++                            "user" => username,
++                            "uid" => uid.as_raw(),
++                            "gid" => gid.as_raw()
++                        );
++                    },
++                    Err(e) => {
++                        error!(self.logger, "Failed to change ownership of tar file";
++                            "path" => %original_tar_path.display(),
++                            "user" => username,
++                            "error" => %e
++                        );
++                    }
++                }
++            },
++            Ok(None) => {
++                error!(self.logger, "User not found"; "user" => username);
++            },
++            Err(e) => {
++                error!(self.logger, "Failed to get user information";
++                    "user" => username,
++                    "error" => %e
++                );
++            }
++        }
++
++        // Calculate the SHA256 hash value of a file.
++        let mut file = File::open(&original_tar_path).await?;
++        let mut hasher = Sha256::new();
++        let mut buffer = [0; 1024];
++        loop {
++            let bytes_read = file.read(&mut buffer).await?;
++            if bytes_read == 0 {
++                break;
++            }
++            hasher.update(&buffer[..bytes_read]);
++        }
++        let hash = hasher.finalize();
++        let hash_hex = format!("{:x}", hash);
++
++        info!(self.logger, "Calculated SHA256 hash of tar file";
++            "path" => %original_tar_path.display(),
++            "sha256" => %hash_hex
++        );
++
++        // Reset the reader to the start position.
++        layer_reader.seek(std::io::SeekFrom::Start(0)).await?;
++        debug!(self.logger, "Reset layer reader to start");
++
+         let decryptor = Decryptor::from_media_type(&layer.media_type);
+         if decryptor.is_encrypted() {
+             if let Some(dc) = decrypt_config {
+-- 
+2.33.0
+
