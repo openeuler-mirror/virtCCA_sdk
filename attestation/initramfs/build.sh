@@ -32,6 +32,6 @@ pushd ${INITRAMFS_PROJ_DIR}
 
 # initramfs build process
 if [ ! -d "buildroot" ]; then
-    git clone https://gitlab.com/buildroot.org/buildroot.git -b 2023.02.11
+    git clone https://gitlab.com/buildroot.org/buildroot.git -b 2024.02
 fi
 cd buildroot && make clean && make virtcca_qemu_defconfig && make
