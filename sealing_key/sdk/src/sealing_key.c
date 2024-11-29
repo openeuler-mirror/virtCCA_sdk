@@ -22,22 +22,23 @@
 
 struct sealing_key_params {
     uint32_t alg;
-    uint8_t salt[SEALING_SALT_LEN];
-    uint32_t salt_len;
+    uint8_t user_param[SEALING_USER_PARAM_LEN];
+    uint32_t user_param_len;
     uint8_t sealing_key[SEALING_KEY_LEN];
 };
 
 #define SEAL_KEY_IOC_MAGIC 'd'
 #define IOCTL_SEALING_KEY _IOWR(SEAL_KEY_IOC_MAGIC, 0, struct sealing_key_params)
 
-int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8_t* sealing_key, uint32_t key_len)
+int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* user_param, uint32_t user_param_len, uint8_t* sealing_key,
+                    uint32_t key_len)
 {
     int rc = 0;
     int fd = -1;
     struct sealing_key_params args = { 0 };
 
-    if (salt && salt_len != SEALING_SALT_LEN) {
-        printf("invalid salt len %d, should be equal %d\n", salt_len, SEALING_SALT_LEN);
+    if (user_param && user_param_len != SEALING_USER_PARAM_LEN) {
+        printf("invalid salt len %d, should be equal %d\n", user_param_len, SEALING_USER_PARAM_LEN);
         return -1;
     }
 
@@ -55,9 +56,9 @@ int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* salt, uint32_t salt_len, uint8
     }
 
     args.alg = alg;
-    if (salt) {
-        (void)memcpy(args.salt, salt, salt_len);
-        args.salt_len = salt_len;
+    if (user_param) {
+        (void)memcpy(args.user_param, user_param, user_param_len);
+        args.user_param_len = user_param_len;
     }
 
     fd = open(SEALING_KEY_DEV_NAME, O_RDWR);
