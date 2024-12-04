@@ -16,17 +16,12 @@
  * Size in bytes of the largest measurement type that can be supported.
  * This macro needs to be updated accordingly if new algorithms are supported.
  */
-#define MAX_MEASUREMENT_SIZE       SHA512_SIZE
 #define MAX_DEV_CERT_SIZE          (4096U)
 
 #define GRANULE_SIZE               (4096U)
 #define MAX_TOKEN_GRANULE_COUNT    (2U)
 #define CHALLENGE_SIZE             (64U)
 
-typedef struct cvm_measurement {
-    int index;
-    unsigned char value[MAX_MEASUREMENT_SIZE];
-} cvm_measurement_t;
 
 typedef struct cvm_tsi_version {
     int major;
