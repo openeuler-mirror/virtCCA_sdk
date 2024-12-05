@@ -38,12 +38,12 @@ int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* user_param, uint32_t user_para
     struct sealing_key_params args = { 0 };
 
     if (user_param && user_param_len != SEALING_USER_PARAM_LEN) {
-        printf("invalid salt len %d, should be equal %d\n", user_param_len, SEALING_USER_PARAM_LEN);
+        printf("invalid user param len %u, should be equal %u\n", user_param_len, SEALING_USER_PARAM_LEN);
         return -1;
     }
 
-    if (key_len < SEALING_KEY_LEN) {
-        printf("invalid sealing key len %d, should not less than %d\n", key_len, SEALING_KEY_LEN);
+    if (sealing_key == NULL || key_len < SEALING_KEY_LEN) {
+        printf("invalid sealing key param, buf %p, len %u\n", sealing_key, key_len);
         return -1;
     }
 
@@ -79,6 +79,7 @@ int get_sealing_key(SEALING_KEY_ALG alg, uint8_t* user_param, uint32_t user_para
     }
 
     (void)memcpy(sealing_key, args.sealing_key, SEALING_KEY_LEN);
+    (void)memset(args.sealing_key, 0, SEALING_KEY_LEN);
     (void)close(fd);
     return 0;
 }

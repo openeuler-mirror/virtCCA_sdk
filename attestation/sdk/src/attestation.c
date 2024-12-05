@@ -59,7 +59,7 @@ int get_attestation_token(tsi_ctx *ctx, unsigned char *challenge, size_t challen
     ssize_t read_len;
     cvm_attestation_cmd_t user_cmd = {0};
 
-    if (ctx == NULL || challenge == NULL || token == NULL) {
+    if (ctx == NULL || challenge == NULL || token == NULL || token_len == NULL) {
         return NULL_INPUT;
     }
     if (challenge_len > CHALLENGE_SIZE) {
@@ -90,7 +90,7 @@ int get_dev_cert(tsi_ctx *ctx, unsigned char *dev_cert, size_t *dev_cert_len)
     int ret;
     cca_dev_cert_t cca_dev_cert = {0};
 
-    if (ctx == NULL || dev_cert == NULL) {
+    if (ctx == NULL || dev_cert == NULL || dev_cert_len == NULL) {
         return NULL_INPUT;
     }
     ret = ioctl(ctx->fd, TMM_GET_DEV_CERT, &cca_dev_cert);

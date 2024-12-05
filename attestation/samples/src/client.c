@@ -18,17 +18,12 @@
 #include "openssl/x509.h"
 #include "openssl/pem.h"
 
-#define MAX_MEASUREMENT_SIZE 64
 
-unsigned char challenge[CHALLENGE_SIZE] = {};
-unsigned char measurement[MAX_MEASUREMENT_SIZE] = {};
-size_t measurement_len = MAX_MEASUREMENT_SIZE;
-
-int verify_token(unsigned char *token, size_t token_len)
+static int verify_token(unsigned char *token, size_t token_len, client_args *args)
 {
     bool ret;
-    cca_token_t cca_token;
-    cert_info_t cert_info;
+    cca_token_t cca_token = {0};
+    cert_info_t cert_info = {0};
 
     ret = parse_cca_attestation_token(&cca_token, token, token_len);
     if (ret != VIRTCCA_SUCCESS) {
@@ -45,14 +40,14 @@ int verify_token(unsigned char *token, size_t token_len)
     strcpy(cert_info.root_cert_url, DEFAULT_ROOT_CERT_URL);
     strcpy(cert_info.sub_cert_url, DEFAULT_SUB_CERT_URL);
 
-    if (cca_token.cvm_token.rim.len != measurement_len ||
-        memcmp(cca_token.cvm_token.rim.ptr, measurement, measurement_len)) {
+    if (cca_token.cvm_token.rim.len != args->meas_len ||
+        memcmp(cca_token.cvm_token.rim.ptr, args->measurement, args->meas_len)) {
         printf("Failed to verify measurement.\n");
         return VERIFY_FAILED;
     }
 
     if (cca_token.cvm_token.challenge.len != CHALLENGE_SIZE ||
-        memcmp(cca_token.cvm_token.challenge.ptr, challenge, CHALLENGE_SIZE)) {
+        memcmp(cca_token.cvm_token.challenge.ptr, args->challenge, CHALLENGE_SIZE)) {
         printf("Failed to verify challenge.\n");
         return VERIFY_FAILED;
     }
@@ -66,10 +61,12 @@ int verify_token(unsigned char *token, size_t token_len)
     return VERIFY_SUCCESS;
 }
 
-int save_dev_cert(const char *prefix, const char * filename, const char *dev_cert, const size_t dev_cert_len)
+static int save_dev_cert(const char *prefix, const char * filename, const char *dev_cert, const size_t dev_cert_len)
 {
     char fullpath[PATH_MAX] = {0};
     FILE *fp = NULL;
+    X509 *aik = NULL;
+    int ret = -1;
 
     snprintf(fullpath, sizeof(fullpath), "%s/%s", prefix, filename);
     fp = fopen(fullpath, "wb");
@@ -78,53 +75,76 @@ int save_dev_cert(const char *prefix, const char * filename, const char *dev_cer
         return 1;
     }
 
-    X509 *aik = X509_new();
-    aik = d2i_X509(&aik, (const unsigned char **)&dev_cert, dev_cert_len);
-    PEM_write_X509(fp, aik);
+    aik = d2i_X509(NULL, (const unsigned char **)&dev_cert, dev_cert_len);
+    if (!aik) {
+        printf("create x509 failed.\n");
+        goto close;
+    }
+    if (PEM_write_X509(fp, aik) != 1) {
+        printf("write dev cert file failed.\n");
+    } else {
+        ret = 0;
+    }
 
     X509_free(aik);
+close:
     fclose(fp);
-    return 0;
+    return ret;
 }
 
-int handle_connect(int sockfd)
+static int handle_connect(int sockfd, client_args *args)
 {
-    int ret;
-    int n;
+    int ret = -1;
     enum MSG_ID msg_id;
-    unsigned char buf[MAX] = {};
-    size_t dev_cert_len = 0;
+    unsigned char buf[MAX] = {0};
+    ssize_t len = 0;
 
     msg_id = DEVICE_CERT_MSG_ID;
-    write(sockfd, &msg_id, sizeof(msg_id));
+    if (write(sockfd, &msg_id, sizeof(msg_id)) != sizeof(msg_id)) {
+        printf("write msg id failed\n");
+        return ret;
+    }
 
-    dev_cert_len = read(sockfd, buf, MAX);
-
-    save_dev_cert(DEFAULT_CERT_PEM_PREFIX, DEFAULT_AIK_CERT_PEM_FILENAME, buf, dev_cert_len);
+    if ((len = read(sockfd, buf, MAX)) <= 0) {
+        printf("read data failed.\n");
+        return ret;
+    }
+    if (save_dev_cert(DEFAULT_CERT_PEM_PREFIX, DEFAULT_AIK_CERT_PEM_FILENAME, buf, len)) {
+        return ret;
+    }
 
     msg_id = ATTEST_MSG_ID;
-    RAND_priv_bytes(challenge, CHALLENGE_SIZE);
+    RAND_priv_bytes(args->challenge, CHALLENGE_SIZE);
 
     memcpy(buf, &msg_id, sizeof(msg_id));
-    memcpy(buf + sizeof(msg_id), challenge, CHALLENGE_SIZE);
-    write(sockfd, buf, sizeof(msg_id) + CHALLENGE_SIZE);
+    memcpy(buf + sizeof(msg_id), args->challenge, CHALLENGE_SIZE);
+    if (write(sockfd, buf, sizeof(msg_id) + CHALLENGE_SIZE) != sizeof(msg_id) + CHALLENGE_SIZE) {
+        printf("write challenge failed\n");
+        return ret;
+    }
 
     unsigned char token[MAX] = {};
-    size_t token_len = 0;
-    token_len = read(sockfd, token, sizeof(token));
+    if ((len = read(sockfd, token, sizeof(token))) <= 0) {
+        printf("read data failed.\n");
+        return ret;
+    }
 
-    ret = verify_token(token, token_len);
+    ret = verify_token(token, len, args);
     if (ret == VERIFY_SUCCESS) {
         msg_id = VERIFY_SUCCESS_MSG_ID;
+        ret = 0;
     } else {
         msg_id = VERIFY_FAILED_MSG_ID;
     }
 
-    write(sockfd, &msg_id, sizeof(msg_id));
+    if (write(sockfd, &msg_id, sizeof(msg_id)) != sizeof(msg_id)) {
+        printf("write back id failed.\n");
+        ret = -1;
+    }
     return ret;
 }
 
-void print_usage(char *name)
+static void print_usage(char *name)
 {
     printf("Usage: %s [options]\n", name);
     printf("Options:\n");
@@ -134,17 +154,15 @@ void print_usage(char *name)
     printf("\t-h, --help                         Print Help (this message) and exit\n");
 }
 
-int main(int argc, char *argv[])
+static int parse_args(int argc, char *argv[], client_args *args)
 {
-    int ret = 1;
-    int sockfd, connfd;
-    struct sockaddr_in servaddr, cli;
+    int option, len;
+    int option_index = 0;
 
-    int ip = htonl(INADDR_LOOPBACK);
-    int port = htons(PORT);
-    unsigned char *measurement_hex = "";
+    args->meas_len = MAX_MEASUREMENT_SIZE;
+    args->ip = htonl(INADDR_LOOPBACK);
+    args->port = htons(PORT);
 
-    int option;
     struct option const long_options[] = {
         { "ip", required_argument, NULL, 'i' },
         { "port", required_argument, NULL, 'p' },
@@ -152,57 +170,64 @@ int main(int argc, char *argv[])
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
-    while (1) {
-        int option_index = 0;
-        option = getopt_long(argc, argv, "i:p:m:h", long_options, &option_index);
-        if (option == -1) {
-            break;
-        }
+    while ((option = getopt_long(argc, argv, "i:p:m:h", long_options, &option_index)) != -1) {
         switch (option) {
-        case 'i':
-            ip = inet_addr(optarg);
-            break;
-        case 'p':
-            port = htons(atoi(optarg));
-            break;
-        case 'm':
-            measurement_hex = optarg;
-            if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
-                printf("Invalid measurement.\n");
-                exit(1);
-            }
-            break;
-        case 'h':
-            print_usage(argv[0]);
-        default:
-            fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
-            exit(1);
+            case 'i':
+                args->ip = inet_addr(optarg);
+                break;
+            case 'p':
+                args->port = htons(atoi(optarg));
+                break;
+            case 'm':
+                len = strnlen(optarg, MAX_MEASUREMENT_HEX_SIZE + 1);
+                if (len == MAX_MEASUREMENT_HEX_SIZE + 1 ||
+                    hex_to_bytes(optarg, len, args->measurement, (size_t *)&args->meas_len) != 0) {
+                    printf("Invalid measurement.\n");
+                    return -1;
+                }
+                break;
+            default:
+                print_usage(argv[0]);
+                return -1;
         }
-
     }
+    return 0;
+}
 
+int main(int argc, char *argv[])
+{
+    int ret = 1;
+    int sockfd = -1;
+    struct sockaddr_in servaddr;
+    client_args args = {0};
+    if (parse_args(argc, argv, &args)) {
+        return ret;
+    }
+    
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         printf("socket creation failed...\n");
         return ret;
-    }
-    else
+    } else {
         printf("Socket successfully created..\n");
+    }
+
     bzero(&servaddr, sizeof(servaddr));
 
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = ip;
-    servaddr.sin_port = port;
+    servaddr.sin_addr.s_addr = args.ip;
+    servaddr.sin_port = args.port;
 
     if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) != 0) {
         printf("connection with the server failed...\n");
-        return ret;
-    }
-    else
+        goto close;
+    } else {
         printf("connected to the server..\n");
+    }
 
-    ret = handle_connect(sockfd);
+    ret = handle_connect(sockfd, &args);
 
+close:
     close(sockfd);
     return ret;
 }

@@ -9,7 +9,7 @@
 
 int hex_to_bytes(unsigned char *in, size_t in_len, unsigned char *out, size_t *out_len)
 {
-    int i;
+    size_t i;
 
     if (in == NULL || out == NULL || out_len == NULL) {
         printf("Param is NULL.");
@@ -37,7 +37,7 @@ int download_cert_pem(const char *prefix, const char *filename, const char *url)
 
     count = snprintf(cmdline_str, sizeof(cmdline_str), "wget -O %s/%s %s",
                      prefix, filename, url);
-    if (count >= CMDLINE_SIZE) {
+    if (count >= CMDLINE_SIZE || count <= 0) {
         printf("Param too long.\n");
         return 1;
     }

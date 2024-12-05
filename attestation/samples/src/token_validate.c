@@ -55,8 +55,7 @@ static bool read_x509_from_pem(const char *prefix, const char *filename, X509 **
         return false;
     }
 
-    *x509_cert = PEM_read_X509(pFile, NULL, NULL, NULL);
-    if (!x509_cert) {
+    if (!PEM_read_X509(pFile, x509_cert, NULL, NULL)) {
         printf("Failed to read x509 from file: %s\n", fullpath);
         fclose(pFile);
         return false;
@@ -160,7 +159,7 @@ bool validate_aik_cert_chain(X509 *x509_aik, X509 *x509_sub, X509 *x509_root)
     return ret;
 }
 
-bool verify_cvm_pubkey(qbuf_t pub_key, X509 *x509_aik)
+static bool verify_cvm_pubkey(qbuf_t pub_key, X509 *x509_aik)
 {
     bool ret = false;
     EVP_PKEY *pkey1;
@@ -237,7 +236,8 @@ bool verify_cca_token_signatures(cert_info_t *cert_info,
 
     if (!x509_root || !x509_sub || !x509_aik) {
         printf("Failed to init X509!\n");
-        return false;
+        ret_bits = 0x7FFFFFFF;
+        goto free;
     }
 
     /* Verify cvm signature */
@@ -306,6 +306,7 @@ bool verify_cca_token_signatures(cert_info_t *cert_info,
         ret_bits &= ~(1 << index);
     }
 
+free:
     X509_free(x509_root);
     X509_free(x509_sub);
     X509_free(x509_aik);

@@ -45,7 +45,6 @@ static uint64_t parse_cvm_claims(cvm_claims_t *claim,
 {
     QCBORItem item;
     QCBORDecodeContext decode_context;
-    uint8_t *_;
     QCBORError ret = QCBOR_SUCCESS;
     int claim_cnt = 0;
 
@@ -163,7 +162,6 @@ static uint64_t parse_cose_sign1(cose_sign1_envelop_t *envelop,
 {
     QCBORItem item;
     QCBORDecodeContext decode_context;
-    uint8_t *_;
     QCBORError ret;
 
     QCBORDecode_Init(&decode_context, *raw, QCBOR_DECODE_MODE_NORMAL);
