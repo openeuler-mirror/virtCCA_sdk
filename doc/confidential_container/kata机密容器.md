@@ -10,4 +10,5 @@ kata容器又称安全容器，容器运行在轻量级虚拟机中，而不是�
 本章节主要介绍如何部署加密容器镜像
 -   **[容器镜像度量](容器镜像度量.md)**  
 当前容器镜像度量基于secGear项目的attestation-agent/attestation-service实现，且secGear暂未适配CoCo社区，因此当前容器度量暂不支持attestation-agent部署在guest OS的通用场景，当前attestation-agent以.so的形式打包在容器镜像中供度量测试程序调用。
-
+-   **[机密容器设备直通](机密容器设备直通.md)**  
+本章节主要介绍如何使能机密容器GPU设备直通，并在机密容器中运行大模型
