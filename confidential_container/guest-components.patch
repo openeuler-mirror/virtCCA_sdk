@@ -3,7 +3,7 @@
  attestation-agent/app/Cargo.toml              |   6 +-
  attestation-agent/attester/Cargo.toml         |   9 +-
  attestation-agent/attester/src/lib.rs         |  14 ++-
- attestation-agent/attester/src/virtcca/mod.rs | 105 ++++++++++++++++++
+ attestation-agent/attester/src/virtcca/mod.rs | 106 ++++++++++++++++++
  .../attester/src/virtcca/virtcca.rs           | 104 +++++++++++++++++
  attestation-agent/kbc/Cargo.toml              |   2 -
  attestation-agent/kbs_protocol/Cargo.toml     |   2 -
@@ -13,7 +13,7 @@
  image-rs/Cargo.toml                           |   3 -
  image-rs/src/stream.rs                        |   2 +-
  ocicrypt-rs/Cargo.toml                        |   2 +-
- 14 files changed, 253 insertions(+), 23 deletions(-)
+ 14 files changed, 254 insertions(+), 23 deletions(-)
  create mode 100644 attestation-agent/attester/src/virtcca/mod.rs
  create mode 100644 attestation-agent/attester/src/virtcca/virtcca.rs
 
@@ -183,10 +183,10 @@ index b1ade1f..2e6f1be 100644
  }
 diff --git a/attestation-agent/attester/src/virtcca/mod.rs b/attestation-agent/attester/src/virtcca/mod.rs
 new file mode 100644
-index 0000000..8ecb20d
+index 0000000..cf86a0a
 --- /dev/null
 +++ b/attestation-agent/attester/src/virtcca/mod.rs
-@@ -0,0 +1,105 @@
+@@ -0,0 +1,106 @@
 +/*
 + * Copyright (c) Huawei Technologies Co., Ltd. 2024. All rights reserved.
 + * secGear is licensed under the Mulan PSL v2.
@@ -278,9 +278,10 @@ index 0000000..8ecb20d
 +        dev_cert.set_len(dev_cert_len);
 +        log::debug!("Device certificate obtained successfully, cert length: {}", dev_cert_len);
 +
-+        let ima_log = {
-+            Some(std::fs::read("/sys/kernel/security/ima/binary_runtime_measurements").unwrap())
-+        };
++        let path = "/sys/kernel/security/ima/binary_runtime_measurements";
++        let ima_log = std::fs::read(path)
++            .map(Some)
++            .map_err(|e| bail!("Failed to read IMA log at {}: {}", path, e))?;
 +        log::debug!("IMA log obtained successfully");
 +
 +        let evidence = VirtccaEvidence {
@@ -544,5 +545,5 @@ index f473c92..f1bf3e1 100644
  async-io = ["tokio"]
  
 -- 
-2.39.1.windows.1
+2.27.0
 
