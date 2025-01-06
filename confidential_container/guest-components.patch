@@ -183,7 +183,7 @@ index b1ade1f..2e6f1be 100644
  }
 diff --git a/attestation-agent/attester/src/virtcca/mod.rs b/attestation-agent/attester/src/virtcca/mod.rs
 new file mode 100644
-index 0000000..cf86a0a
+index 0000000..78ffc08
 --- /dev/null
 +++ b/attestation-agent/attester/src/virtcca/mod.rs
 @@ -0,0 +1,106 @@
@@ -279,9 +279,9 @@ index 0000000..cf86a0a
 +        log::debug!("Device certificate obtained successfully, cert length: {}", dev_cert_len);
 +
 +        let path = "/sys/kernel/security/ima/binary_runtime_measurements";
-+        let ima_log = std::fs::read(path)
-+            .map(Some)
-+            .map_err(|e| bail!("Failed to read IMA log at {}: {}", path, e))?;
++        let ima_log = {
++		Some(std::fs::read("/sys/kernel/security/ima/binary_runtime_measurements").unwrap())
++	};
 +        log::debug!("IMA log obtained successfully");
 +
 +        let evidence = VirtccaEvidence {
@@ -545,5 +545,5 @@ index f473c92..f1bf3e1 100644
  async-io = ["tokio"]
  
 -- 
-2.27.0
+2.33.0
 
