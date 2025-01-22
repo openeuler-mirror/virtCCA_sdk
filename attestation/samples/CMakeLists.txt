@@ -10,10 +10,25 @@ include_directories(
     t_cose/inc
 )
 
+set(COMMON_SOURCES
+    src/binary_blob.c
+    src/vcca_event_log.c
+    src/vcca_firmware_state.c
+    src/verify.c
+    src/rem.c
+)
+
 add_executable(server src/server.c)
 target_link_libraries(server vccaattestation)
 
-add_executable(client src/client.c src/token_parse.c src/token_validate.c src/utils.c)
+add_executable(client 
+    src/client.c 
+    src/token_parse.c 
+    src/token_validate.c 
+    src/utils.c
+    ${COMMON_SOURCES}
+)
+
 target_link_libraries(client t_cose qcbor)
 target_link_libraries(client OpenSSL::Crypto)
 target_link_libraries(client m)
