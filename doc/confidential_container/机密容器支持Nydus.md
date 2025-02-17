@@ -17,6 +17,13 @@
 
 获取地址：https://github.com/containerd/nydus-snapshotter/releases/download/v0.14.0/nydus-snapshotter-v0.14.0-linux-arm64.tar.gz
 
+3 Nerdctl
+
+软件版本：v1.7.7
+
+作用： containerd 命令行工具。
+
+获取地址：https://github.com/containerd/nydus-snapshotter/releases/download/v0.14.0/nydus-snapshotter-v0.14.0-linux-arm64.tar.gz
 ### 环境依赖要求
 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 完成kata机密容器基础环境部署，主要包括以下组件：
 -	runc
@@ -46,7 +53,15 @@ tar -zxvf  nydus-snapshotter-v0.14.0-linux-arm64.tar.gz
 install -D -m 755 bin/containerd-nydus-grpc  /usr/bin
 ```
 
-4 使用nydusify转换自建镜像仓中的镜像格式。
+4  安装nerdctl
+
+```
+wget https://github.com/containerd/nerdctl/releases/download/v1.7.7/nerdctl-1.7.7-linux-arm64.tar.gz
+tar -zxvf nerdctl-1.7.7-linux-arm64.tar.gz
+install -D -m 755 nerdctl /usr/bin
+```
+
+5 使用nydusify转换自建镜像仓中的镜像格式。
 
 ```bash
 nydusify convert --source registry.com:5000/busybox:latest --target registry.com:5000/busybox:latest-nydus
@@ -54,7 +69,7 @@ nydusify convert --source registry.com:5000/busybox:latest --target registry.com
 
 > 本文档以私有仓busybox镜像为例进行说明，实际部署请按需将`registry.com:5000/busybox:latest`自行替换为目标镜像名。
 
-5 使用`nydusify`检查目标镜像，命令显示验证完毕且无错误信息，说明镜像转换成功。
+6 使用`nydusify`检查目标镜像，命令显示验证完毕且无错误信息，说明镜像转换成功。
 
 ```bash
 nydusify check --target  registry.com:5000/busybox:latest-nydus
@@ -62,7 +77,7 @@ nydusify check --target  registry.com:5000/busybox:latest-nydus
 
 ![image](figures/nydus-check.png)
 
-6 配置nydusd，文件路径：`/etc/nydus/nydusd-config.fusedev.json`。
+7 配置nydusd，文件路径：`/etc/nydus/nydusd-config.fusedev.json`。
 
 ```bash
 tee /etc/nydus/nydusd-config.fusedev.json > /dev/null << EOF
@@ -72,7 +87,7 @@ tee /etc/nydus/nydusd-config.fusedev.json > /dev/null << EOF
       "type": "registry",
       "config": {
         "scheme": "https",
-        "skip_verify": false,
+        "skip_verify": true,
         "timeout": 5,
         "connect_timeout": 5,
         "retry_limit": 4,
@@ -86,6 +101,16 @@ tee /etc/nydus/nydusd-config.fusedev.json > /dev/null << EOF
       }
     }
   },
+  "mode": "direct",
+  "digest_validate": false,
+  "iostats_files": false,
+  "enable_xattr": true,
+  "fs_prefetch": {
+    "enable": true,
+    "threads_count": 4
+  }
+}
+EOF
 ```
 
 - `device.backend.config.scheme`:  访问方式https/http；
@@ -95,15 +120,29 @@ echo -n "username:password" | base64
 ```
 - `device.backend.config.skip_verify`:  是否跳过https证书检查。
 
-7 启动运行containerd-nydus-grpc。
+8 获取nydus-snapshotter配置文件，
 
-```bash
-containerd-nydus-grpc \
---nydusd-config /etc/nydus/nydusd-config.fusedev.json 
---log-to-stdout
+```
+wget https://raw.githubusercontent.com/containerd/nydus-snapshotter/refs/tags/v0.14.0/misc/snapshotter/config.toml
+
+vim config.toml
 ```
 
-8 修改containerd配置文件：`/etc/containerd/config.toml`。
+9 设置 nydus 的 home 目录`root`选项与本机 containerd 对应的`root`选项，此处设置与 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.m) 中设置的containerd一致； 设置nydusd和nydus-image的实际安装路径
+```
+root = "/home/kata/var/lib/containerd/io.containerd.snapshotter.v1.nydus"
+nydusd_path= "/usr/bin/nydusd"
+nydusimage_path= "/usr/bin/nydus-image"
+```
+![image](figures/config.png)
+
+9 启动运行containerd-nydus-grpc。
+
+```bash
+containerd-nydus-grpc --config config.toml --log-to-stdout
+```
+
+10 修改containerd配置文件：`/etc/containerd/config.toml`。
 
 ```
 [plugins."io.containerd.grpc.v1.cri".containerd]
@@ -119,20 +158,20 @@ containerd-nydus-grpc \
     address = "/run/containerd-nydus/containerd-nydus-grpc.sock"
 ```
 
-9 重启containerd。
+11 重启containerd。
 
 ```bash
 systemctl daemon-reload &&  systemctl restart containerd
 ```
 
-10 此时能够使用ctr拉取和运行nydus镜像。
+12 使用nerdctl拉取nydus镜像，使用ctr运行基于kata的nydus镜像。
 
 ```bash
-ctr image pull --snapshotter=nydus registry.com:5000/busybox:latest-nydus
+nerdctl pull --snapshotter=nydus registry.com:5000/busybox:latest-nydus
 ctr run --snapshotter=nydus --runtime "io.containerd.kata.v2"  --rm -t registry.com:5000/busybox:latest-nydus test-kata sh
 ```
 
-![image](figures/nydus_ctr部署.png)
+![image](figures/9af5ff25-576c-4cd4-babb-30b4bcab8fa0.png)
 
 ## 使用k8s部署基于nydus镜像的kata容器
 
