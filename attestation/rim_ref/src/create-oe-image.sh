@@ -179,7 +179,7 @@ set_guest_password() {
 
 measure_guest_image() {
     guestunmount ${TMP_MOUNT_PATH}
-    gcc MeasurePe.c -o MeasurePe -lcrypto
+    gcc measure_pe.c -o MeasurePe -lcrypto
     mkdir -p ${TMP_MOUNT_PATH}
     guestmount -a ${TMP_GUEST_IMG_PATH} -i ${TMP_MOUNT_PATH}
     if [ $? -ne 0 ]; then
