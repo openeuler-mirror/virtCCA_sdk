@@ -3,27 +3,229 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <strings.h>
 #include <sys/socket.h>
 #include <unistd.h>
 #include <getopt.h>
 #include <linux/limits.h>
+#include <stdbool.h>
+#include <stdint.h>
 
 #include "token_parse.h"
 #include "token_validate.h"
 #include "utils.h"
 #include "common.h"
+#include "vcca_event_log.h"
+#include "vcca_firmware_state.h"
+#include "binary_blob.h"
+#include "verify.h"
+#include "config.h"
 
 #include "openssl/rand.h"
 #include "openssl/x509.h"
 #include "openssl/pem.h"
 
+#define MAX_MEASUREMENT_SIZE 64
+#define CCEL_ACPI_TABLE_PATH "./ccel.bin"
+#define CCEL_EVENT_LOG_PATH "./event_log.bin"
+#define HASH_STR_LENGTH 64
 
-static int verify_token(unsigned char *token, size_t token_len, client_args *args)
+/* Global configuration variable definition */
+config_t g_config = {
+    .ccel_file = CCEL_ACPI_TABLE_PATH,
+    .event_log_file = CCEL_EVENT_LOG_PATH,
+    .json_file = NULL  /* Will be set from command line */
+};
+
+unsigned char challenge[CHALLENGE_SIZE] = {};
+unsigned char measurement[MAX_MEASUREMENT_SIZE] = {};
+size_t measurement_len = MAX_MEASUREMENT_SIZE;
+bool use_firmware = false;
+bool dump_eventlog = false;
+char* ref_json_file = NULL;
+
+/* JSON parsing state */
+typedef struct {
+    char* grub;
+    char* grub_cfg;
+    char* kernel;
+    char* initramfs;
+    char* hash_alg;
+} firmware_reference_t;
+
+/* ACPI table parsing structure */
+typedef struct {
+    uint8_t revision;
+    uint8_t checksum;
+    char oem_id[6];
+    uint8_t cc_type;
+    uint8_t cc_subtype;
+    uint64_t log_length;
+    uint64_t log_address;
+} acpi_table_info_t;
+
+/* Helper function: Convert byte array to hex string */
+static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
+{
+    for (size_t i = 0; i < len; i++) {
+        sprintf(hex_str + (i * 2), "%02x", bytes[i]);
+    }
+}
+
+/* Helper function: Extract string value from JSON */
+static char* extract_json_string(const char* json, const char* key)
+{
+    char* value = NULL;
+    char search_key[64];
+    snprintf(search_key, sizeof(search_key), "\"%s\":", key);
+    
+    char* pos = strstr(json, search_key);
+    if (pos) {
+        pos = strchr(pos + strlen(search_key), '"');
+        if (pos) {
+            pos++; /* Skip quote */
+            char* end = strchr(pos, '"');
+            if (end) {
+                size_t len = end - pos;
+                value = (char*)malloc(len + 1);
+                if (value) {
+                    strncpy(value, pos, len);
+                    value[len] = '\0';
+                }
+            }
+        }
+    }
+    return value;
+}
+
+/* Helper function: Parse JSON file */
+static bool parse_json_file(const char* filename, firmware_reference_t* ref)
+{
+    if (!filename || !ref) {
+        return false;
+    }
+
+    size_t file_size;
+    char* json_content = read_text_file(filename, &file_size);
+    if (!json_content) {
+        return false;
+    }
+
+    ref->grub = extract_json_string(json_content, "grub");
+    ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
+    ref->kernel = extract_json_string(json_content, "kernel");
+    ref->initramfs = extract_json_string(json_content, "initramfs");
+    ref->hash_alg = extract_json_string(json_content, "hash_alg");
+
+    free(json_content);
+    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
+}
+
+/* Helper function: Free JSON parsing results */
+static void free_firmware_reference(firmware_reference_t* ref)
+{
+    if (!ref) {
+        return;
+    }
+    free(ref->grub);
+    free(ref->grub_cfg);
+    free(ref->kernel);
+    free(ref->initramfs);
+    free(ref->hash_alg);
+}
+
+/* Helper function: Compare hash value and print result */
+static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
+                                      const uint8_t* actual_hash, size_t hash_size)
+{
+    if (!ref_hash || !actual_hash) {
+        return false;
+    }
+    
+    char actual_hex[HASH_STR_LENGTH + 1] = {0};
+    bytes_to_hex_string(actual_hash, hash_size, actual_hex);
+    
+    bool match = (strncmp(ref_hash, actual_hex, HASH_STR_LENGTH) == 0);
+    printf("\n%s verification %s\n", component_name, match ? "passed" : "failed");
+    printf("Expected: %s\n", ref_hash);
+    printf("Got:      %s\n", actual_hex);
+    return match;
+}
+
+static bool verify_firmware_state_local(const char* json_file, const vcca_firmware_log_state_t* state)
+{
+    if (!json_file || !state) {
+        return false;
+    }
+
+    firmware_reference_t ref = {0};
+    bool result = false;
+
+    /* Parse JSON file */
+    if (!parse_json_file(json_file, &ref)) {
+        printf("Error: Failed to parse JSON file\n");
+        return false;
+    }
+
+    printf("\nVerifying firmware components...\n");
+
+    /* Verify EFI state (grub) */
+    if (state->efi && state->efi->image_count > 0) {
+        bool found_match = false;
+        for (uint32_t i = 0; i < state->efi->image_count; i++) {
+            if (compare_and_print_hash("GRUB", ref.grub,
+                state->efi->images[i].image_hash,
+                state->efi->images[i].image_hash_size)) {
+                found_match = true;
+                break;
+            }
+        }
+        if (!found_match) {
+            goto cleanup;
+        }
+    }
+
+    /* Verify GRUB configuration */
+    if (state->grub && state->grub->config_hash) {
+        if (!compare_and_print_hash("GRUB config", ref.grub_cfg,
+            state->grub->config_hash,
+            state->grub->config_hash_size)) {
+            goto cleanup;
+        }
+    }
+
+    /* Verify kernel and initramfs */
+    if (state->linux_kernel) {
+        if (state->linux_kernel->kernel_hash) {
+            if (!compare_and_print_hash("Kernel", ref.kernel,
+                state->linux_kernel->kernel_hash,
+                state->linux_kernel->kernel_hash_size)) {
+                goto cleanup;
+            }
+        }
+        if (state->linux_kernel->initrd_hash) {
+            if (!compare_and_print_hash("Initramfs", ref.initramfs,
+                state->linux_kernel->initrd_hash,
+                state->linux_kernel->initrd_hash_size)) {
+                goto cleanup;
+            }
+        }
+    }
+
+    printf("\nAll firmware components verification passed\n");
+    result = true;
+
+cleanup:
+    free_firmware_reference(&ref);
+    return result;
+}
+
+int verify_token(unsigned char *token, size_t token_len)
 {
     bool ret;
-    cca_token_t cca_token = {0};
-    cert_info_t cert_info = {0};
+    cca_token_t cca_token;
+    cert_info_t cert_info;
 
     ret = parse_cca_attestation_token(&cca_token, token, token_len);
     if (ret != VIRTCCA_SUCCESS) {
@@ -40,33 +242,92 @@ static int verify_token(unsigned char *token, size_t token_len, client_args *arg
     strcpy(cert_info.root_cert_url, DEFAULT_ROOT_CERT_URL);
     strcpy(cert_info.sub_cert_url, DEFAULT_SUB_CERT_URL);
 
-    if (cca_token.cvm_token.rim.len != args->meas_len ||
-        memcmp(cca_token.cvm_token.rim.ptr, args->measurement, args->meas_len)) {
-        printf("Failed to verify measurement.\n");
-        return VERIFY_FAILED;
-    }
-
-    if (cca_token.cvm_token.challenge.len != CHALLENGE_SIZE ||
-        memcmp(cca_token.cvm_token.challenge.ptr, args->challenge, CHALLENGE_SIZE)) {
-        printf("Failed to verify challenge.\n");
-        return VERIFY_FAILED;
-    }
-
     ret = verify_cca_token_signatures(&cert_info,
                                 cca_token.cvm_cose,
                                 cca_token.cvm_token.pub_key);
     if (!ret) {
         return VERIFY_FAILED;
     }
+
+    if (cca_token.cvm_token.challenge.len != CHALLENGE_SIZE ||
+        memcmp(cca_token.cvm_token.challenge.ptr, challenge, CHALLENGE_SIZE)) {
+        printf("Failed to verify challenge.\n");
+        return VERIFY_FAILED;
+    }
+
+    if (cca_token.cvm_token.rim.len != measurement_len ||
+        memcmp(cca_token.cvm_token.rim.ptr, measurement, measurement_len)) {
+        printf("Failed to verify measurement.\n");
+        return VERIFY_FAILED;
+    }
+
+    if (use_firmware) {
+        /* Initialize event log processor */
+        vcca_event_log_t event_log;
+        if (!vcca_event_log_init(&event_log, 0, 0)) {
+            printf("Error: Failed to initialize event log\n");
+            return VERIFY_FAILED;
+        }
+
+        /* Replay event log to calculate REM values */
+        if (!vcca_event_log_replay(&event_log)) {
+            printf("Error: Failed to replay event log\n");
+            return VERIFY_FAILED;
+        }
+
+        /* Verify REM values from token */
+        printf("\nVerifying REM values from token...\n");
+        bool all_rems_passed = true;
+        for (int i = 0; i < REM_COUNT; i++) {
+            if (cca_token.cvm_token.rem[i].len != sizeof(rem_t)) {
+                printf("Error: Invalid REM[%d] size in token\n", i);
+                return VERIFY_FAILED;
+            }
+            verify_single_rem(i, (rem_t*)cca_token.cvm_token.rem[i].ptr, &event_log.rems[i]);
+            if (!rem_compare((rem_t*)cca_token.cvm_token.rem[i].ptr, &event_log.rems[i])) {
+                all_rems_passed = false;
+            }
+        }
+
+        if (!all_rems_passed) {
+            printf("\nREM verification failed\n");
+            return VERIFY_FAILED;
+        }
+
+        printf("\nAll REM values verified successfully\n");
+
+        /* If JSON file is provided, verify firmware state */
+        if (ref_json_file) {
+            printf("\nVerifying firmware state...\n");
+            vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
+            if (!state) {
+                printf("Error: Failed to create firmware state\n");
+                return VERIFY_FAILED;
+            }
+
+            if (!vcca_firmware_log_state_extract(&event_log, state)) {
+                printf("Error: Failed to extract firmware state\n");
+                vcca_firmware_log_state_free(state);
+                return VERIFY_FAILED;
+            }
+
+            if (!verify_firmware_state_local(ref_json_file, state)) {
+                printf("Error: Firmware state verification failed\n");
+                vcca_firmware_log_state_free(state);
+                return VERIFY_FAILED;
+            }
+
+            vcca_firmware_log_state_free(state);
+        }
+    }
+
     return VERIFY_SUCCESS;
 }
 
-static int save_dev_cert(const char *prefix, const char * filename, const char *dev_cert, const size_t dev_cert_len)
+int save_dev_cert(const char *prefix, const char * filename, const char *dev_cert, const size_t dev_cert_len)
 {
     char fullpath[PATH_MAX] = {0};
     FILE *fp = NULL;
-    X509 *aik = NULL;
-    int ret = -1;
 
     snprintf(fullpath, sizeof(fullpath), "%s/%s", prefix, filename);
     fp = fopen(fullpath, "wb");
@@ -75,135 +336,321 @@ static int save_dev_cert(const char *prefix, const char * filename, const char *
         return 1;
     }
 
-    aik = d2i_X509(NULL, (const unsigned char **)&dev_cert, dev_cert_len);
-    if (!aik) {
-        printf("create x509 failed.\n");
-        goto close;
-    }
-    if (PEM_write_X509(fp, aik) != 1) {
-        printf("write dev cert file failed.\n");
-    } else {
-        ret = 0;
-    }
+    X509 *aik = X509_new();
+    aik = d2i_X509(&aik, (const unsigned char **)&dev_cert, dev_cert_len);
+    PEM_write_X509(fp, aik);
 
     X509_free(aik);
-close:
     fclose(fp);
-    return ret;
+    return 0;
 }
 
-static int handle_connect(int sockfd, client_args *args)
+int save_file_data(const char *file_name, unsigned char *file_data, size_t file_size)
 {
-    int ret = -1;
+    FILE *file = fopen(file_name, "wb");
+    if (file == NULL) {
+        printf("Failed to open file %s\n", file_name);
+        return 1;
+    }
+
+    size_t byte_write = fwrite(file_data, 1, file_size, file);
+    if (byte_write != file_size) {
+        printf("Failed to write opened file");
+        fclose(file);
+        return 1;
+    }
+
+    fclose(file);
+    return 0;
+}
+
+static void print_hex_dump_with_ascii(const uint8_t* data, size_t length)
+{
+    char ascii_buf[17] = {0};
+
+    printf("=> Read CCEL ACPI Table\n");
+    for (size_t i = 0; i < length; i++) {
+        if (i % 16 == 0) {
+            if (i > 0) {
+                printf("  %s\n", ascii_buf);
+            }
+            printf("%08zX  ", i);
+            memset(ascii_buf, 0, sizeof(ascii_buf));
+        }
+        printf("%02X ", data[i]);
+        ascii_buf[i % 16] = isprint(data[i]) ? data[i] : '.';
+    }
+
+    /* Process the last line */
+    if (length % 16 != 0) {
+        for (size_t i = length % 16; i < 16; i++) {
+            printf("   ");
+        }
+    }
+    printf("  %s\n", ascii_buf);
+}
+
+static void print_acpi_table(const uint8_t* ccel_data, size_t file_size, const acpi_table_info_t* info)
+{
+    print_hex_dump_with_ascii(ccel_data, file_size);
+
+    printf("Revision:     %d\n", info->revision);
+    printf("Length:       %zu\n", file_size);
+    printf("Checksum:     %02X\n", info->checksum);
+    
+    printf("OEM ID:       b'");
+    for (int i = 0; i < 6; i++) {
+        printf("%c", info->oem_id[i]);
+    }
+    printf("'\n");
+
+    printf("CC Type:      %d\n", info->cc_type);
+    printf("CC Sub-type:  %d\n", info->cc_subtype);
+    
+    printf("Log Lenght:   0x%08lX\n", (unsigned long)info->log_length);
+    printf("Log Address:  0x%08lX\n", (unsigned long)info->log_address);
+    printf("\n");
+}
+
+static bool parse_acpi_table(const uint8_t* ccel_data, size_t file_size, acpi_table_info_t* info)
+{
+    if (!ccel_data || !info || file_size < 56) {
+        return false;
+    }
+
+    if (memcmp(ccel_data, "CCEL", 4) != 0) {
+        printf("Error: Invalid CCEL signature\n");
+        return false;
+    }
+
+    info->revision = ccel_data[8];
+    info->checksum = ccel_data[9];
+    memcpy(info->oem_id, ccel_data + 10, 6);
+    info->cc_type = ccel_data[36];
+    info->cc_subtype = ccel_data[37];
+    info->log_length = *(uint64_t*)(ccel_data + 40);
+    info->log_address = *(uint64_t*)(ccel_data + 48);
+
+    print_acpi_table(ccel_data, file_size, info);
+
+    return true;
+}
+
+static int handle_eventlogs_command(void)
+{
+    size_t file_size;
+    uint8_t* ccel_data = read_file_data(g_config.ccel_file, &file_size);
+    if (!ccel_data) {
+        return 1;
+    }
+
+    acpi_table_info_t table_info;
+    if (!parse_acpi_table(ccel_data, file_size, &table_info)) {
+        free(ccel_data);
+        return 1;
+    }
+
+    vcca_event_log_t event_log;
+    if (!vcca_event_log_init(&event_log, (size_t)table_info.log_address, (size_t)table_info.log_length)) {
+        printf("Error: Failed to initialize event log\n");
+        free(ccel_data);
+        return 1;
+    }
+
+    vcca_event_log_dump(&event_log);
+
+    free(ccel_data);
+    return 0;
+}
+
+int handle_connect(int sockfd)
+{
+    int ret;
+    int n;
     enum MSG_ID msg_id;
-    unsigned char buf[MAX] = {0};
-    ssize_t len = 0;
+    unsigned char buf[MAX] = {};
+    size_t dev_cert_len = 0;
 
+    /* Step 1: Get device certificate */
     msg_id = DEVICE_CERT_MSG_ID;
-    if (write(sockfd, &msg_id, sizeof(msg_id)) != sizeof(msg_id)) {
-        printf("write msg id failed\n");
-        return ret;
+    write(sockfd, &msg_id, sizeof(msg_id));
+    dev_cert_len = read(sockfd, buf, MAX);
+    ret = save_dev_cert(DEFAULT_CERT_PEM_PREFIX, DEFAULT_AIK_CERT_PEM_FILENAME, buf, dev_cert_len);
+    if (ret != 0) {
+        printf("Failed to save device certificate.\n");
+        return VERIFY_FAILED;
     }
 
-    if ((len = read(sockfd, buf, MAX)) <= 0) {
-        printf("read data failed.\n");
-        return ret;
-    }
-    if (save_dev_cert(DEFAULT_CERT_PEM_PREFIX, DEFAULT_AIK_CERT_PEM_FILENAME, buf, len)) {
-        return ret;
-    }
-
+    /* Step 2: Get attestation token */
     msg_id = ATTEST_MSG_ID;
-    RAND_priv_bytes(args->challenge, CHALLENGE_SIZE);
-
+    RAND_priv_bytes(challenge, CHALLENGE_SIZE);
     memcpy(buf, &msg_id, sizeof(msg_id));
-    memcpy(buf + sizeof(msg_id), args->challenge, CHALLENGE_SIZE);
-    if (write(sockfd, buf, sizeof(msg_id) + CHALLENGE_SIZE) != sizeof(msg_id) + CHALLENGE_SIZE) {
-        printf("write challenge failed\n");
-        return ret;
-    }
+    memcpy(buf + sizeof(msg_id), challenge, CHALLENGE_SIZE);
+    write(sockfd, buf, sizeof(msg_id) + CHALLENGE_SIZE);
 
     unsigned char token[MAX] = {};
-    if ((len = read(sockfd, token, sizeof(token))) <= 0) {
-        printf("read data failed.\n");
-        return ret;
+    size_t token_len = 0;
+    token_len = read(sockfd, token, sizeof(token));
+
+    /* Step 3: If using firmware, get CCEL and event log first */
+    if (use_firmware || dump_eventlog) {
+        /* Get CCEL ACPI table */
+        msg_id = CCEL_ACPI_TABLE_ID;
+        write(sockfd, &msg_id, sizeof(msg_id));
+        unsigned char ccel_table[MAX] = {};
+        size_t ccel_table_len = 0;
+        ccel_table_len = read(sockfd, ccel_table, sizeof(ccel_table));
+        if (ccel_table_len <= 0) {
+            printf("Failed to receive CCEL ACPI table data.\n");
+            return VERIFY_FAILED;
+        }
+        ret = save_file_data(CCEL_ACPI_TABLE_PATH, ccel_table, ccel_table_len);
+        if (ret != 0) {
+            printf("Failed to save CCEL ACPI table.\n");
+            return VERIFY_FAILED;
+        }
+        
+        /* Get CCEL event log */
+        msg_id = CCEL_EVENT_LOG_ID;
+        write(sockfd, &msg_id, sizeof(msg_id));
+        
+        /* First read the event log size */
+        size_t expected_size = 0;
+        ssize_t size_received = read(sockfd, &expected_size, sizeof(size_t));
+        if (size_received != sizeof(size_t)) {
+            printf("Failed to receive event log size.\n");
+            return VERIFY_FAILED;
+        }
+        
+        if (expected_size == 0 || expected_size > MAX_LOG) {
+            printf("Invalid event log size: %zu\n", expected_size);
+            return VERIFY_FAILED;
+        }
+        
+        printf("Expecting to receive %zu bytes of event log data\n", expected_size);
+        
+        /* Allocate receive buffer */
+        unsigned char *ccel_data = (unsigned char *)malloc(expected_size);
+        if (!ccel_data) {
+            printf("Failed to allocate memory for event log.\n");
+            return VERIFY_FAILED;
+        }
+        
+        /* Loop receiving data until complete */
+        size_t total_received = 0;
+        while (total_received < expected_size) {
+            ssize_t bytes_received = read(sockfd, ccel_data + total_received, expected_size - total_received);
+            if (bytes_received <= 0) {
+                printf("Failed to receive event log data at offset %zu.\n", total_received);
+                free(ccel_data);
+                return VERIFY_FAILED;
+            }
+            total_received += bytes_received;
+            printf("Received %zd bytes, total %zu of %zu bytes\n", bytes_received, total_received, expected_size);
+        }
+        
+        ret = save_file_data(CCEL_EVENT_LOG_PATH, ccel_data, expected_size);
+        free(ccel_data);
+        
+        if (ret != 0) {
+            printf("Failed to save event log data.\n");
+            return VERIFY_FAILED;
+        }
+        
+        printf("Successfully saved complete event log (%zu bytes)\n", expected_size);
     }
 
-    ret = verify_token(token, len, args);
-    if (ret == VERIFY_SUCCESS) {
-        msg_id = VERIFY_SUCCESS_MSG_ID;
-        ret = 0;
-    } else {
-        msg_id = VERIFY_FAILED_MSG_ID;
+    if (dump_eventlog) {
+        return handle_eventlogs_command();
     }
 
-    if (write(sockfd, &msg_id, sizeof(msg_id)) != sizeof(msg_id)) {
-        printf("write back id failed.\n");
-        ret = -1;
-    }
+    /* Step 4: Verify token and firmware */
+    ret = verify_token(token, token_len);
+
+    /* Step 5: Send verification result */
+    msg_id = ret == VERIFY_SUCCESS ? VERIFY_SUCCESS_MSG_ID : VERIFY_FAILED_MSG_ID;
+    write(sockfd, &msg_id, sizeof(msg_id));
+    
     return ret;
 }
 
-static void print_usage(char *name)
+void print_usage(char *name)
 {
     printf("Usage: %s [options]\n", name);
     printf("Options:\n");
     printf("\t-i, --ip <ip>                      Listening IP address\n");
     printf("\t-p, --port <port>                  Listening tcp port\n");
     printf("\t-m, --measurement <measurement>    Initial measurement for cVM\n");
+    printf("\t-f, --firmware <json>              Enable firmware verification with JSON reference file\n");
+    printf("\t-e, --eventlog                     Dump VCCA event logs\n");
     printf("\t-h, --help                         Print Help (this message) and exit\n");
-}
-
-static int parse_args(int argc, char *argv[], client_args *args)
-{
-    int option, len;
-    int option_index = 0;
-
-    args->meas_len = MAX_MEASUREMENT_SIZE;
-    args->ip = htonl(INADDR_LOOPBACK);
-    args->port = htons(PORT);
-
-    struct option const long_options[] = {
-        { "ip", required_argument, NULL, 'i' },
-        { "port", required_argument, NULL, 'p' },
-        { "measurement", required_argument, NULL, 'm' },
-        { "help", no_argument, NULL, 'h' },
-        { NULL, 0, NULL, 0 }
-    };
-    while ((option = getopt_long(argc, argv, "i:p:m:h", long_options, &option_index)) != -1) {
-        switch (option) {
-            case 'i':
-                args->ip = inet_addr(optarg);
-                break;
-            case 'p':
-                args->port = htons(atoi(optarg));
-                break;
-            case 'm':
-                len = strnlen(optarg, MAX_MEASUREMENT_HEX_SIZE + 1);
-                if (len == MAX_MEASUREMENT_HEX_SIZE + 1 ||
-                    hex_to_bytes(optarg, len, args->measurement, (size_t *)&args->meas_len) != 0) {
-                    printf("Invalid measurement.\n");
-                    return -1;
-                }
-                break;
-            default:
-                print_usage(argv[0]);
-                return -1;
-        }
-    }
-    return 0;
 }
 
 int main(int argc, char *argv[])
 {
     int ret = 1;
-    int sockfd = -1;
-    struct sockaddr_in servaddr;
-    client_args args = {0};
-    if (parse_args(argc, argv, &args)) {
-        return ret;
+    int sockfd, connfd;
+    struct sockaddr_in servaddr, cli;
+
+    int ip = htonl(INADDR_LOOPBACK);
+    int port = htons(PORT);
+    unsigned char *measurement_hex = "";
+
+    int option;
+    struct option const long_options[] = {
+        { "ip", required_argument, NULL, 'i' },
+        { "port", required_argument, NULL, 'p' },
+        { "measurement", required_argument, NULL, 'm' },
+        { "firmware", required_argument, NULL, 'f'},
+        { "eventlog", no_argument, NULL, 'e'},
+        { "help", no_argument, NULL, 'h' },
+        { NULL, 0, NULL, 0 }
+    };
+    while (1) {
+        int option_index = 0;
+        option = getopt_long(argc, argv, "i:p:m:f:eh", long_options, &option_index);
+        if (option == -1) {
+            break;
+        }
+        switch (option) {
+        case 'i':
+            ip = inet_addr(optarg);
+            break;
+        case 'p':
+            port = htons(atoi(optarg));
+            break;
+        case 'm':
+            measurement_hex = optarg;
+            if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
+                printf("Invalid measurement.\n");
+                exit(1);
+            }
+            break;
+        case 'f':
+            if (dump_eventlog) {
+                printf("Error: Cannot use -f and -e together\n");
+                exit(1);
+            }
+            use_firmware = true;
+            ref_json_file = optarg;
+            g_config.json_file = optarg;
+            break;
+        case 'e':
+            if (use_firmware) {
+                printf("Error: Cannot use -e and -f together\n");
+                exit(1);
+            }
+            dump_eventlog = true;
+            break;
+        case 'h':
+            print_usage(argv[0]);
+            exit(0);
+        default:
+            fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
+            exit(1);
+        }
     }
-    
+
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
         printf("socket creation failed...\n");
@@ -211,23 +658,21 @@ int main(int argc, char *argv[])
     } else {
         printf("Socket successfully created..\n");
     }
-
     bzero(&servaddr, sizeof(servaddr));
 
     servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = args.ip;
-    servaddr.sin_port = args.port;
+    servaddr.sin_addr.s_addr = ip;
+    servaddr.sin_port = port;
 
     if (connect(sockfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) != 0) {
         printf("connection with the server failed...\n");
-        goto close;
+        return ret;
     } else {
         printf("connected to the server..\n");
     }
 
-    ret = handle_connect(sockfd, &args);
+    ret = handle_connect(sockfd);
 
-close:
     close(sockfd);
     return ret;
 }
