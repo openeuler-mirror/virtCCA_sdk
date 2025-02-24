@@ -4,9 +4,9 @@
 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 完成kata机密容器基础环境部署，主要依赖如下
 | 软件包 | 版本 | 说明 | 获取路径 |
 | :---------: | :---------: | :---------: | :---------: |
-| runc | v1.1.8 | 低级容器运行时 | 源Yum下载 |
+| runc | v1.1.8 | 低级容器运行时 | 通过yum源下载或安装 |
 | contaienrd | v1.6.8.2 | coco社区适配的高级容器运行时 | https://github.com/confidential-containers/containerd/releases/download/v1.6.8.2/containerd-1.6.8.2-linux-arm64.tar.gz |
-| k8s | 1.18.20 | 容器编排系统 | 源Yum下载 |
+| k8s | 1.18.20 | 容器编排系统 | 通过yum源下载或安装 |
 | kata | cc0.8.0 | 安全容器 | 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 编译部署 |
 | guest kernel | / | / | 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 编译部署 |
 | rootfs | / | / | 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 编译部署 |
@@ -17,7 +17,7 @@
 | :---------: | :---------: | :---------: | :---------: |
 | nydus-static | v2.3.0 | 包含nydusd、nydus-image、nydusify等二进制软件，提供Nydus镜像解析、转换OCI镜像为Nydus等功能。 | https://github.com/dragonflyoss/nydus/releases/download/v2.3.0/nydus-static-v2.3.0-linux-arm64.tgz |
 | Nydus Snapshotter | v0.15.0 | containerd外部插件，接收containerd的CRI请求，调用nydusd处理nydus镜像。 | https://github.com/containerd/nydus-snapshotter/releases/download/v0.14.0/nydus-snapshotter-v0.14.0-linux-arm64.tar.gz |
-| Nerdctl | v1.7.7 | containerd 命令行工具。 | https://github.com/containerd/nydus-snapshotter/releases/download/v0.14.0/nydus-snapshotter-v0.14.0-linux-arm64.tar.gz |
+| Nerdctl | v1.7.7 | containerd 命令行工具。 | https://github.com/containerd/nerdctl/releases/download/v1.7.7/nerdctl-1.7.7-linux-arm64.tar.gz |
 
 ## nydus基础环境搭建
 
@@ -72,7 +72,7 @@ tee /etc/nydus/nydusd-config.fusedev.json > /dev/null << EOF
       "type": "registry",
       "config": {
         "scheme": "https",
-        "skip_verify": true,
+        "skip_verify": false,
         "timeout": 5,
         "connect_timeout": 5,
         "retry_limit": 4,
@@ -109,15 +109,17 @@ echo -n "username:password" | base64
 
 ```
 wget https://raw.githubusercontent.com/containerd/nydus-snapshotter/refs/tags/v0.14.0/misc/snapshotter/config.toml
+```
 
+8. 设置 nydus 的 home 目录`root`选项与本机 containerd 对应的`root`选项，此处设置与 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.m) 中设置的containerd一致； 设置nydusd和nydus-image的实际安装路径，并关闭 `virtio_fs_extra_args` 选项。
+```
 vim config.toml
-```
 
-8. 设置 nydus 的 home 目录`root`选项与本机 containerd 对应的`root`选项，此处设置与 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.m) 中设置的containerd一致； 设置nydusd和nydus-image的实际安装路径。
-```
 root = "/home/kata/var/lib/containerd/io.containerd.snapshotter.v1.nydus"
 nydusd_path= "/usr/bin/nydusd"
 nydusimage_path= "/usr/bin/nydus-image"
+
+:wq
 ```
 ![image](figures/config.png)
 
@@ -174,13 +176,16 @@ vim /etc/kata-containers/configuration.toml
 shared_fs = "virtio-fs-nydus" 
 virtio_fs_daemon =  "/usr/bin/nydusd" 
 virtio_fs_extra_args = []
+# virtio_fs_extra_args = [ "--thread-pool-size=1",]
 ```
 
 ![image](figures/cd5c2f8f-2498-4d65-b41b-8766c3fc9648.png)
 
 3. 设置service\_offload = true。
 
-![image](figures/cc4efad6-ffac-48d6-bb33-d228f29af5f6.png)
+```
+service_offload = true
+```
 
 4. 在kata-containers/src/agent/Cargo.toml中image-rs的features新增nydus。
 
