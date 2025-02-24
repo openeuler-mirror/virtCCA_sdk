@@ -44,6 +44,8 @@ size_t measurement_len = MAX_MEASUREMENT_SIZE;
 bool use_firmware = false;
 bool dump_eventlog = false;
 char* ref_json_file = NULL;
+bool use_fde = false;
+char* rootfs_key_file = NULL;
 
 /* JSON parsing state */
 typedef struct {
@@ -570,6 +572,21 @@ int handle_connect(int sockfd)
     /* Step 5: Send verification result */
     msg_id = ret == VERIFY_SUCCESS ? VERIFY_SUCCESS_MSG_ID : VERIFY_FAILED_MSG_ID;
     write(sockfd, &msg_id, sizeof(msg_id));
+    if (ret != 0) {
+        return VERIFY_FAILED;
+    }
+
+    if (use_fde) {
+        printf("Send keyfile for encrypted rootfs.\n");
+        size_t key_file_len;
+        uint8_t* key_file = read_file_data(rootfs_key_file, &key_file_len);
+        if (!key_file) {
+            printf("Failed to read key file data.\n");
+            return 1;
+        }
+        write(sockfd, key_file, key_file_len);
+        free(key_file);
+    }
     
     return ret;
 }
@@ -583,6 +600,7 @@ void print_usage(char *name)
     printf("\t-m, --measurement <measurement>    Initial measurement for cVM\n");
     printf("\t-f, --firmware <json>              Enable firmware verification with JSON reference file\n");
     printf("\t-e, --eventlog                     Dump VCCA event logs\n");
+    printf("\t-k, --fdekey <keyfile>             Enable Full Disk Encryption with rootfs key file\n");
     printf("\t-h, --help                         Print Help (this message) and exit\n");
 }
 
@@ -603,51 +621,56 @@ int main(int argc, char *argv[])
         { "measurement", required_argument, NULL, 'm' },
         { "firmware", required_argument, NULL, 'f'},
         { "eventlog", no_argument, NULL, 'e'},
+        { "fdekey", required_argument, NULL, 'k'},
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     while (1) {
         int option_index = 0;
-        option = getopt_long(argc, argv, "i:p:m:f:eh", long_options, &option_index);
+        option = getopt_long(argc, argv, "i:p:m:f:k:eh", long_options, &option_index);
         if (option == -1) {
             break;
         }
         switch (option) {
-        case 'i':
-            ip = inet_addr(optarg);
-            break;
-        case 'p':
-            port = htons(atoi(optarg));
-            break;
-        case 'm':
-            measurement_hex = optarg;
-            if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
-                printf("Invalid measurement.\n");
+            case 'i':
+                ip = inet_addr(optarg);
+                break;
+            case 'p':
+                port = htons(atoi(optarg));
+                break;
+            case 'm':
+                measurement_hex = optarg;
+                if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
+                    printf("Invalid measurement.\n");
+                    exit(1);
+                }
+                break;
+            case 'f':
+                if (dump_eventlog) {
+                    printf("Error: Cannot use -f and -e together\n");
+                    exit(1);
+                }
+                use_firmware = true;
+                ref_json_file = optarg;
+                g_config.json_file = optarg;
+                break;
+            case 'e':
+                if (use_firmware) {
+                    printf("Error: Cannot use -e and -f together\n");
+                    exit(1);
+                }
+                dump_eventlog = true;
+                break;
+            case 'k':
+                use_fde = true;
+                rootfs_key_file = optarg;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                exit(0);
+            default:
+                fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
                 exit(1);
-            }
-            break;
-        case 'f':
-            if (dump_eventlog) {
-                printf("Error: Cannot use -f and -e together\n");
-                exit(1);
-            }
-            use_firmware = true;
-            ref_json_file = optarg;
-            g_config.json_file = optarg;
-            break;
-        case 'e':
-            if (use_firmware) {
-                printf("Error: Cannot use -e and -f together\n");
-                exit(1);
-            }
-            dump_eventlog = true;
-            break;
-        case 'h':
-            print_usage(argv[0]);
-            exit(0);
-        default:
-            fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
-            exit(1);
         }
     }
 
