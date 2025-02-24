@@ -249,199 +249,161 @@ static uint64_t HashCompleteAndExtend(HASH_HANDLE HashHandle,
     return EFI_SUCCESS;
 }
 
-static uint64_t MeasurePeImageAndExtend(uint32_t RtmrIndex, uint64_t ImageAddress, UINTN ImageSize,
-    TPML_DIGEST_VALUES *DigestList)
+/* parse DOS/PE headers */
+static uint64_t parse_pe_headers(uint64_t image_address,
+                                 uint32_t *pe_coff_offset,
+                                 efi_image_optional_header_ptr_union *hdr)
 {
-    uint64_t Status;
-    EFI_IMAGE_DOS_HEADER *DosHdr;
-    uint32_t PeCoffHeaderOffset;
-    EFI_IMAGE_SECTION_HEADER *Section = NULL;
-    uint8_t *HashBase;
-    UINTN HashSize;
-    UINTN SumOfBytesHashed;
-    EFI_IMAGE_SECTION_HEADER *SectionHeader;
-    UINTN Index;
-    UINTN Pos;
-    EFI_IMAGE_OPTIONAL_HEADER_PTR_UNION Hdr;
-    uint32_t NumberOfRvaAndSizes;
-    uint32_t CertSize;
-    HASH_HANDLE HashHandle = NULL;
+    efi_image_dos_header *dos_hdr = (efi_image_dos_header *)image_address;
+    *pe_coff_offset = 0;
 
-    Status = EFI_UNSUPPORTED;
-    SectionHeader = NULL;
-
-    DosHdr = (EFI_IMAGE_DOS_HEADER *)(uintptr_t)ImageAddress;
-    PeCoffHeaderOffset = 0;
-    if (DosHdr->e_magic == EFI_IMAGE_DOS_SIGNATURE) {
-        PeCoffHeaderOffset = DosHdr->e_lfanew;
+    if (dos_hdr->e_magic == EFI_IMAGE_DOS_SIGNATURE) {
+        *pe_coff_offset = dos_hdr->e_lfanew;
     }
 
-    Hdr.Pe32 = (EFI_IMAGE_NT_HEADERS32 *)((uint8_t *)(uintptr_t)ImageAddress + PeCoffHeaderOffset);
-    if (Hdr.Pe32->Signature != EFI_IMAGE_NT_SIGNATURE) {
-        Status = EFI_UNSUPPORTED;
-        goto Finish;
+    hdr->pe32 = (efi_image_nt_headers32 *)((uint8_t *)image_address + *pe_coff_offset);
+    if (hdr->pe32->signature != EFI_IMAGE_NT_SIGNATURE) {
+        return EFI_UNSUPPORTED;
     }
+    return EFI_SUCCESS;
+}
 
-    Status = HashStart(&HashHandle);
-    if (EFI_ERROR(Status)) {
-        goto Finish;
-    }
+/* Hash the image header from its base to beginning of the image checksum. */
+static uint64_t hash_optional_header_part(hash_handle_t hash_handle,
+                                          efi_image_optional_header_ptr_union *hdr,
+                                          uint64_t image_address,
+                                          size_t *sum_hashed)
+{
+    uint8_t *hash_base;
+    size_t hash_size;
+    uint32_t number_of_rva_and_sizes;
+    bool is_pe32 = (hdr->pe32->optional_header.magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC);
 
-    if (Hdr.Pe32->OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-        NumberOfRvaAndSizes = Hdr.Pe32->OptionalHeader.NumberOfRvaAndSizes;
-        HashBase = (uint8_t *)(uintptr_t)ImageAddress;
-        HashSize = (uintptr_t)(&Hdr.Pe32->OptionalHeader.CheckSum) - (uintptr_t)HashBase;
+    if (is_pe32) {
+        /* Use PE32 offset */
+        number_of_rva_and_sizes = hdr->pe32->optional_header.number_of_rva_and_sizes;
+        hash_base = (uint8_t *)image_address;
+        hash_size = ((uintptr_t)&hdr->pe32->optional_header.checksum) - ((uintptr_t)hash_base);
     } else {
-        NumberOfRvaAndSizes = Hdr.Pe32Plus->OptionalHeader.NumberOfRvaAndSizes;
-        HashBase = (uint8_t *)(uintptr_t)ImageAddress;
-        HashSize = (uintptr_t)(&Hdr.Pe32Plus->OptionalHeader.CheckSum) - (uintptr_t)HashBase;
+        /* Use pe32+ offset */
+        number_of_rva_and_sizes = hdr->pe32plus->optional_header.number_of_rva_and_sizes;
+        hash_base = (uint8_t *)image_address;
+        hash_size = ((uintptr_t)&hdr->pe32plus->optional_header.checksum) - ((uintptr_t)hash_base);
     }
 
-    Status = HashUpdate(HashHandle, HashBase, HashSize);
-    if (EFI_ERROR(Status)) {
-        goto Finish;
-    }
+    uint64_t status = hash_update(hash_handle, hash_base, hash_size);
+    if (EFI_ERROR(status))
+        return status;
 
-    /* skip checksum */
-    if (NumberOfRvaAndSizes <= EFI_IMAGE_DIRECTORY_ENTRY_SECURITY) {
-        if (Hdr.Pe32->OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-            HashBase = (uint8_t *)&Hdr.Pe32->OptionalHeader.CheckSum + sizeof(uint32_t);
-            HashSize = Hdr.Pe32->OptionalHeader.SizeOfHeaders - (UINTN)(HashBase - (uint8_t *)(uintptr_t)ImageAddress);
-        } else {
-            HashBase = (uint8_t *)&Hdr.Pe32Plus->OptionalHeader.CheckSum + sizeof(uint32_t);
-            HashSize =
-                Hdr.Pe32Plus->OptionalHeader.SizeOfHeaders - (UINTN)(HashBase - (uint8_t *)(uintptr_t)ImageAddress);
-        }
-        if (HashSize != 0) {
-            Status = HashUpdate(HashHandle, HashBase, HashSize);
-            if (EFI_ERROR(Status)) {
-                goto Finish;
-            }
+    /* Skip over the image checksum */
+    if (number_of_rva_and_sizes <= EFI_IMAGE_DIRECTORY_ENTRY_SECURITY) {
+        uint8_t *post_checksum = (uint8_t *)&hdr->pe32->optional_header.checksum + sizeof(uint32_t);
+        size_t header_size =
+            is_pe32 ? hdr->pe32->optional_header.size_of_headers : hdr->pe32plus->optional_header.size_of_headers;
+        hash_size = header_size - (post_checksum - (uint8_t *)image_address);
+
+        if (hash_size > 0) {
+            status = hash_update(hash_handle, post_checksum, hash_size);
         }
     } else {
-        if (Hdr.Pe32->OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-            HashBase = (uint8_t *)&Hdr.Pe32->OptionalHeader.CheckSum + sizeof(uint32_t);
-            HashSize =
-                (UINTN)(&Hdr.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY]) - (UINTN)HashBase;
-        } else {
-            HashBase = (uint8_t *)&Hdr.Pe32Plus->OptionalHeader.CheckSum + sizeof(uint32_t);
-            HashSize = (UINTN)(&Hdr.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY]) -
-                (UINTN)HashBase;
+        uint8_t *post_checksum = (uint8_t *)&hdr->pe32->optional_header.checksum + sizeof(uint32_t);
+        size_t security_offset = is_pe32 ?
+            (uintptr_t)&hdr->pe32->optional_header.data_directory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY] :
+            (uintptr_t)&hdr->pe32plus->optional_header.data_directory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY];
+
+        hash_size = security_offset - (uintptr_t)post_checksum;
+        if (hash_size > 0) {
+            status = hash_update(hash_handle, post_checksum, hash_size);
+            if (EFI_ERROR(status))
+                return status;
         }
-        if (HashSize != 0) {
-            Status = HashUpdate(HashHandle, HashBase, HashSize);
-            if (EFI_ERROR(Status)) {
-                goto Finish;
-            }
-        }
-        /* skip the Security Directory */
-        if (Hdr.Pe32->OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-            HashBase = (uint8_t *)&Hdr.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1];
-            HashSize = Hdr.Pe32->OptionalHeader.SizeOfHeaders - (UINTN)(HashBase - (uint8_t *)(uintptr_t)ImageAddress);
-        } else {
-            HashBase = (uint8_t *)&Hdr.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY + 1];
-            HashSize =
-                Hdr.Pe32Plus->OptionalHeader.SizeOfHeaders - (UINTN)(HashBase - (uint8_t *)(uintptr_t)ImageAddress);
-        }
-        if (HashSize != 0) {
-            Status = HashUpdate(HashHandle, HashBase, HashSize);
-            if (EFI_ERROR(Status)) {
-                goto Finish;
-            }
+
+        uint8_t *post_security = (uint8_t *)(security_offset + sizeof(efi_image_data_directory));
+        size_t header_size =
+            is_pe32 ? hdr->pe32->optional_header.size_of_headers : hdr->pe32plus->optional_header.size_of_headers;
+        hash_size = header_size - (post_security - (uint8_t *)image_address);
+
+        if (hash_size > 0) {
+            status = hash_update(hash_handle, post_security, hash_size);
         }
     }
 
-    if (Hdr.Pe32->OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-        SumOfBytesHashed = Hdr.Pe32->OptionalHeader.SizeOfHeaders;
-    } else {
-        SumOfBytesHashed = Hdr.Pe32Plus->OptionalHeader.SizeOfHeaders;
+    *sum_hashed = is_pe32 ? hdr->pe32->optional_header.size_of_headers : hdr->pe32plus->optional_header.size_of_headers;
+    return status;
+}
+
+static efi_image_section_header *copy_and_sort_sections(uint64_t image_address,
+                                                        uint32_t pe_coff_offset,
+                                                        efi_image_nt_headers32 *nt_header,
+                                                        uint64_t *status)
+{
+    size_t num_sections = nt_header->file_header.number_of_sections;
+    efi_image_section_header *sections = calloc(num_sections, sizeof(efi_image_section_header));
+    if (!sections) {
+        *status = EFI_OUT_OF_RESOURCES;
+        return NULL;
     }
 
-    /* order the section header */
-    SectionHeader =
-        (EFI_IMAGE_SECTION_HEADER *)calloc(Hdr.Pe32->FileHeader.NumberOfSections, sizeof(EFI_IMAGE_SECTION_HEADER));
-    if (SectionHeader == NULL) {
-        Status = EFI_OUT_OF_RESOURCES;
-        goto Finish;
-    }
+    uint8_t *section_base = (uint8_t *)image_address + pe_coff_offset + sizeof(uint32_t) + // Signature
+        sizeof(efi_image_file_header) + nt_header->file_header.size_of_optional_header;
 
-    EFI_IMAGE_SECTION_HEADER *SectionTmp = (EFI_IMAGE_SECTION_HEADER *)((uint8_t *)(uintptr_t)ImageAddress +
-        PeCoffHeaderOffset + sizeof(uint32_t) +
-        sizeof(EFI_IMAGE_FILE_HEADER) + Hdr.Pe32->FileHeader.SizeOfOptionalHeader);
+    memcpy(sections, section_base, num_sections * sizeof(efi_image_section_header));
 
-    for (Index = 0; Index < Hdr.Pe32->FileHeader.NumberOfSections; Index++) {
-        memcpy(&SectionHeader[Index], &SectionTmp[Index], sizeof(EFI_IMAGE_SECTION_HEADER));
-    }
-    for (Index = 1; Index < Hdr.Pe32->FileHeader.NumberOfSections; Index++) {
-        EFI_IMAGE_SECTION_HEADER temp;
-        memcpy(&temp, &SectionHeader[Index], sizeof(EFI_IMAGE_SECTION_HEADER));
-        Pos = Index;
-        while (Pos > 0 && (SectionHeader[Pos - 1].PointerToRawData > temp.PointerToRawData)) {
-            memcpy(&SectionHeader[Pos], &SectionHeader[Pos - 1], sizeof(EFI_IMAGE_SECTION_HEADER));
-            Pos--;
+    for (size_t i = 1; i < num_sections; i++) {
+        efi_image_section_header temp = sections[i];
+        size_t j = i;
+        while (j > 0 && sections[j - 1].pointer_to_raw_data > temp.pointer_to_raw_data) {
+            sections[j] = sections[j - 1];
+            j--;
         }
-        if (Pos != Index) {
-            memcpy(&SectionHeader[Pos], &temp, sizeof(EFI_IMAGE_SECTION_HEADER));
-        }
+        sections[j] = temp;
     }
 
-    for (Index = 0; Index < Hdr.Pe32->FileHeader.NumberOfSections; Index++) {
-        Section = &SectionHeader[Index];
-        if (Section->SizeOfRawData == 0) {
+    *status = EFI_SUCCESS;
+    return sections;
+}
+
+static uint64_t hash_section_data(hash_handle_t hash_handle,
+                                  efi_image_section_header *sections,
+                                  size_t num_sections,
+                                  uint64_t image_address, size_t *sum_hashed)
+{
+    for (size_t i = 0; i < num_sections; i++) {
+        if (sections[i].size_of_raw_data == 0)
             continue;
-        }
-        HashBase = (uint8_t *)(uintptr_t)ImageAddress + Section->PointerToRawData;
-        HashSize = Section->SizeOfRawData;
 
-        Status = HashUpdate(HashHandle, HashBase, HashSize);
-        if (EFI_ERROR(Status)) {
-            goto Finish;
-        }
-        SumOfBytesHashed += HashSize;
+        uint8_t *section_base = (uint8_t *)image_address + sections[i].pointer_to_raw_data;
+        uint64_t status = hash_update(hash_handle, section_base, sections[i].size_of_raw_data);
+        if (EFI_ERROR(status))
+            return status;
+
+        *sum_hashed += sections[i].size_of_raw_data;
     }
- 
-    if (ImageSize > SumOfBytesHashed) {
-        HashBase = (uint8_t *)(uintptr_t)ImageAddress + SumOfBytesHashed;
+    return EFI_SUCCESS;
+}
 
-        if (NumberOfRvaAndSizes <= EFI_IMAGE_DIRECTORY_ENTRY_SECURITY) {
-            CertSize = 0;
-        } else {
-            if (Hdr.Pe32->OptionalHeader.Magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC) {
-                CertSize = Hdr.Pe32->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-            } else {
-                CertSize = Hdr.Pe32Plus->OptionalHeader.DataDirectory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY].Size;
-            }
-        }
+static uint64_t process_trailing_data(hash_handle_t hash_handle,
+                                      efi_image_optional_header_ptr_union *hdr,
+                                      uint64_t image_address,
+                                      size_t image_size,
+                                      size_t sum_hashed)
+{
+    uint32_t cert_size = 0;
+    bool is_pe32 = (hdr->pe32->optional_header.magic == EFI_IMAGE_NT_OPTIONAL_HDR32_MAGIC);
+    uint32_t number_of_rva = is_pe32 ? hdr->pe32->optional_header.number_of_rva_and_sizes :
+                                       hdr->pe32plus->optional_header.number_of_rva_and_sizes;
 
-        if (ImageSize > (CertSize + SumOfBytesHashed)) {
-            HashSize = ImageSize - CertSize - SumOfBytesHashed;
-            Status = HashUpdate(HashHandle, HashBase, HashSize);
-            if (EFI_ERROR(Status)) {
-                goto Finish;
-            }
-        } else if (ImageSize < (CertSize + SumOfBytesHashed)) {
-            Status = EFI_UNSUPPORTED;
-            goto Finish;
-        }
+    if (number_of_rva > EFI_IMAGE_DIRECTORY_ENTRY_SECURITY) {
+        cert_size = is_pe32 ? hdr->pe32->optional_header.data_directory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY].size :
+                              hdr->pe32plus->optional_header.data_directory[EFI_IMAGE_DIRECTORY_ENTRY_SECURITY].size;
     }
 
-    Status = HashCompleteAndExtend(HashHandle, RtmrIndex, NULL, 0, DigestList);
-    HashHandle = NULL;
-    if (EFI_ERROR(Status)) {
-        goto Finish;
+    if (image_size > sum_hashed + cert_size) {
+        uint8_t *trailing_base = (uint8_t *)image_address + sum_hashed;
+        size_t trailing_size = image_size - sum_hashed - cert_size;
+        return hash_update(hash_handle, trailing_base, trailing_size);
     }
-
-Finish:
-    if (SectionHeader != NULL) {
-        free(SectionHeader);
-        SectionHeader = NULL;
-    }
-
-    if (HashHandle != NULL) {
-        free(HashHandle);
-        HashHandle = NULL;
-    }
-    return Status;
+    return EFI_SUCCESS;
 }
 
 /**
