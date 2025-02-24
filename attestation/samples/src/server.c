@@ -3,6 +3,7 @@
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
@@ -13,6 +14,8 @@
 
 #define CCEL_ACPI_TABLE_PATH "/sys/firmware/acpi/tables/CCEL"
 #define CCEL_EVENT_LOG_PATH "/sys/firmware/acpi/tables/data/CCEL"
+#define KEY_FILE_PATH "/root/rootfs_key.bin"
+bool use_fde = false;
 
 int read_file_data(const char *file_name, unsigned char **file_data, size_t *file_size)
 {
@@ -42,6 +45,25 @@ int read_file_data(const char *file_name, unsigned char **file_data, size_t *fil
     }
 
     fclose(file);
+    return 0;
+}
+
+int save_file_data(const char *file_name, unsigned char *file_data, size_t file_size)
+{
+    FILE *file = fopen(file_name, "wb");
+    if (file == NULL) {
+        printf("Failed to open file %s\n", file_name);
+        return 1;
+    }
+
+    size_t byte_write = fwrite(file_data, 1, file_size, file);
+    if (byte_write != file_size) {
+        printf("Failed to write opened file");
+        (void) fclose(file);
+        return 1;
+    }
+
+    (void) fclose(file);
     return 0;
 }
 
@@ -132,6 +154,21 @@ int handle_connect(int connfd, tsi_ctx *ctx)
         } else if (msg_id == VERIFY_SUCCESS_MSG_ID) {
             printf("Succeed to verify!\n");
             ret = VERIFY_SUCCESS;
+
+            if (use_fde) {
+                unsigned char key_file[MAX] = {};
+                size_t key_file_len = 0;
+                key_file_len = read(connfd, key_file, sizeof(key_file));
+                if (key_file_len <= 0) {
+                    printf("Failed to receive key file data.\n");
+                    return VERIFY_FAILED;
+                }
+                ret = save_file_data(KEY_FILE_PATH, key_file, key_file_len);
+                if (ret != 0) {
+                    printf("Failed to save key file data.\n");
+                    return VERIFY_FAILED;
+                }
+            }
             break;
         } else if (msg_id == VERIFY_FAILED_MSG_ID) {
             printf("Failed to verify!\n");
@@ -156,6 +193,7 @@ void print_usage(char *name)
     printf("Options:\n");
     printf("\t-i, --ip <ip>                      Listening IP address\n");
     printf("\t-p, --port <port>                  Listening tcp port\n");
+    printf("\t-k, --fdekey                       Enable Full Disk Encryption with rootfs key file\n");
     printf("\t-h, --help                         Print Help (this message) and exit\n");
 }
 
@@ -171,27 +209,31 @@ int main(int argc, char *argv[])
     struct option const long_options[] = {
         { "ip", required_argument, NULL, 'i' },
         { "port", required_argument, NULL, 'p' },
+        { "fdekey", no_argument, NULL, 'k'},
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     while (1) {
         int option_index = 0;
-        option = getopt_long(argc, argv, "i:p:h", long_options, &option_index);
+        option = getopt_long(argc, argv, "i:p:kh", long_options, &option_index);
         if (option == -1) {
             break;
         }
         switch (option) {
-        case 'i':
-            ip = inet_addr(optarg);
-            break;
-        case 'p':
-            port = htons(atoi(optarg));
-            break;
-        case 'h':
-            print_usage(argv[0]);
-        default:
-            fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
-            exit(1);
+            case 'i':
+                ip = inet_addr(optarg);
+                break;
+            case 'p':
+                port = htons(atoi(optarg));
+                break;
+            case 'k':
+                use_fde = true;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+            default:
+                fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
+                exit(1);
         }
     }
 
