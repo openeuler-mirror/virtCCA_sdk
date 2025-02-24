@@ -444,10 +444,62 @@ Finish:
     return Status;
 }
 
-/**
- * main()  MeasurePeImageAndExtend()
- *  ./MeasurePe <PE>
- */
+static uint64_t measure_pe_image_and_extend(uint64_t image_address,
+                                            size_t image_size,
+                                            tpml_digest_values_t *digest_list)
+{
+    uint64_t status;
+    efi_image_optional_header_ptr_union hdr;
+    uint32_t pe_coff_offset;
+    hash_handle_t hash_handle = NULL;
+    efi_image_section_header *sorted_sections = NULL;
+    size_t sum_hashed = 0;
+
+    /* 1. parse headers */
+    if ((status = parse_pe_headers(image_address, &pe_coff_offset, &hdr)) != EFI_SUCCESS) {
+        goto cleanup;
+    }
+
+    /* 2. initialize hash */
+    if ((status = hash_start(&hash_handle)) != EFI_SUCCESS) {
+        goto cleanup;
+    }
+
+    /* 3. parse optional headers */
+    if ((status = hash_optional_header_part(hash_handle, &hdr, image_address, &sum_hashed)) != EFI_SUCCESS) {
+        goto cleanup;
+    }
+
+    /* 4. copy and sort sections */
+    efi_image_nt_headers32 *nt_header = hdr.pe32;
+    sorted_sections = copy_and_sort_sections(image_address, pe_coff_offset, nt_header, &status);
+    if (EFI_ERROR(status)) {
+        goto cleanup;
+    }
+
+    /* 5. hash section data */
+    if ((status = hash_section_data(hash_handle, sorted_sections, nt_header->file_header.number_of_sections,
+        image_address, &sum_hashed)) != EFI_SUCCESS) {
+        goto cleanup;
+    }
+
+    /* 6. process trailing data */
+    if ((status = process_trailing_data(hash_handle, &hdr, image_address, image_size, sum_hashed)) != EFI_SUCCESS) {
+        goto cleanup;
+    }
+
+    /* 7. finalize the SHA hash */
+    status = hash_complete_and_extend(hash_handle, NULL, 0, digest_list);
+    hash_handle = NULL;
+
+cleanup:
+    if (sorted_sections)
+        free(sorted_sections);
+    if (hash_handle)
+        hash_complete_and_extend(hash_handle, NULL, 0, NULL);
+    return status;
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < MIN_ARGC) {
@@ -461,6 +513,7 @@ int main(int argc, char *argv[])
         perror("fopen");
         return -1;
     }
+
     if (fseek(fp, 0, SEEK_END) != 0) {
         fclose(fp);
         return -1;
@@ -478,7 +531,7 @@ int main(int argc, char *argv[])
     }
 
     uint8_t *buffer = (uint8_t *)malloc(filesize);
-    if (buffer == NULL) {
+    if (!buffer) {
         fclose(fp);
         printf("Out of memory.\n");
         return -1;
@@ -494,18 +547,16 @@ int main(int argc, char *argv[])
         free(buffer);
         return -1;
     }
-    TPML_DIGEST_VALUES digestList = {0};
-    uint64_t status = MeasurePeImageAndExtend(0,
-        (uint64_t)(uintptr_t)buffer, (UINTN)filesize, &digestList);
+    tpml_digest_values_t digest_list;
+    uint64_t status = measure_pe_image_and_extend((uint64_t)(uintptr_t)buffer, (size_t)filesize, &digest_list);
     if (status == EFI_SUCCESS) {
         printf("Measure PE image succeed, SHA-256 = ");
         for (int i = 0; i < SHA256_DIGEST_SIZE; i++) {
-            printf("%02x", digestList.Sha256[i]);
+            printf("%02x", digest_list.sha256[i]);
         }
         printf("\n");
     } else {
-        printf("Measure PE image failed, uint64_t = %llu\n", (unsigned long long)status);
-        return -1;
+        printf("Measure PE image failed, EFI_STATUS = %llu\n", (unsigned long long)status);
     }
 
     free(buffer);
