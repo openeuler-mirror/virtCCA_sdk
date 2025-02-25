@@ -195,7 +195,7 @@ service_offload = true
 
 ```bash
 cd kata-containers/tools/osbuilder/rootfs-builder/ 
-SECCOMP=no CFLAGS=-mno-outline-atomics ./rootfs.sh -r  "\$PWD/kata-overlay" 
+SECCOMP=no CFLAGS=-mno-outline-atomics ./rootfs.sh -r  "$PWD/kata-overlay" 
 mount rootfs.img rootfs 
 cp kata-overlay/usr/bin/kata-agent rootfs/usr/bin
 ```
