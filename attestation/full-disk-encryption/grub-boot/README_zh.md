@@ -36,7 +36,7 @@ sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output i
 >-   -o ：可选参数，用于指定cVM镜像的输出路径。
 
 -   脚本`create-fde-image.sh`将使用加密密钥加密根文件系统，它会创建一个名为`fde`的`dracut`模块，并将`FDE`相关组件例如认证应用`server`、`FDE`代理`fde-agent.sh`和加密工具`cryptsetup`安装到`initramfs`中。内核启动参数会追加`root=/dev/mapper/encroot`（表示加密的根文件系统分区），同时更新`/etc/fstab`以自动挂载加密根分区。
--   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新参考度量值（如 `hash.json`）并将其复制到`$\{FDE_DIR}/attestation`目录用于认证。
+-   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新参考度量值（如 `hash.json`）并将其复制到`${FDE_DIR}/attestation`目录用于认证。
 -   默认输出镜像为`${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2`，其磁盘分区如下。
    ![](./doc/disk-partition.png)
     >加密后的根分区/dev/vda2通过LUKS保护。
@@ -45,13 +45,13 @@ sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output i
 当cVM启动进入initramfs阶段时，终端会输出IP地址和端口。
 1.  用户根据cVM的输出日志，在宿主机`terminal`中执行如下命令，用来保存IP地址和端口号。
 
-    ```
-    export IP_ADDR=192.168.122.150
+    ```bash
+    export IP_ADDR=192.168.122.150 # ip地址根据实际情况修改
     export PORT=7220
     ```
 2.  `initramfs`中的脚本`fde-agent.sh`会自动执行如下命令, 该命令会通过TMM服务接口获取度量报告（`attestation token`）， 并等待`client`的请求。
 
-    ```
+    ```bash
     /usr/bin/server -i ${IP_ADDR} -p $PORT -k
     ```
 3.  client向server发起请求，获取度量报告， 在本地验证通过后， 再将加密密钥发送到`server`。
