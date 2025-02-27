@@ -32,7 +32,7 @@ cd ${FDE_DIR}/image
 sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output image>
 ```
 >-   -i ：表示cVM镜像。
->-   -g ：表示cVM镜像组件（grub镜像、grub.cfg 文件、Kernel镜像、initramfs镜像）的基线度量值文件。
+>-   -g ：表示cVM镜像组件（grub镜像、grub.cfg 文件、Kernel镜像、initramfs镜像）的参考度量值文件。
 >-   -o ：可选参数，用于指定cVM镜像的输出路径。
 
 -   脚本`create-fde-image.sh`将使用加密密钥加密根文件系统，它会创建一个名为`fde`的`dracut`模块，并将`FDE`相关组件例如认证应用`server`、`FDE`代理`fde-agent.sh`和加密工具`cryptsetup`安装到`initramfs`中。内核启动参数会追加`root=/dev/mapper/encroot`（表示加密的根文件系统分区），同时更新`/etc/fstab`以自动挂载加密根分区。
