@@ -15,28 +15,32 @@
 
 FDE代码位于目录`FDE_DIR=virtCCA_sdk/attestation/full-disk-encryption/grub-boot`中。
 
+FDE参考实现提供了两种远程证明示例:`virtCCA_sdk/attestation/samples` 和 `virtCCA_sdk/attestation/rats-tls`,两者的区别在于`rats-tls`具有更安全的TLS通信。
+
 ```
 cd ${FDE_DIR}/attestation
-sh pre-fde.sh
+sh pre-fde.sh -a <samples or rats-tls>
 ```
+>-  -a ：输入samples 或者 rats-tls 来选择不同的远程证明示例，如`export ATTEST_CASE=samples`。
 
--   脚本`pre-fde.sh`会检查认证所需的`client`和`server`是否存在。若不存在，则会重新编译`virtCCA_sdk/attestation/sdk`和`virtCCA_sdk/attestation/samples`，并将认证应用复制到当前目录。
+-   脚本`pre-fde.sh`会检查远程证明所需的`virtcca-client`和`virtcca-server`是否存在。若不存在，则会重新编译`virtCCA_sdk/attestation/sdk`和远程证明示例，并将远程证明程序复制到当前目录。
 -   脚本`pre-fde.sh`还会检查镜像加密的密钥文件是否存在，若不存在，则会在当前目录重新生成密钥文件。
 
-## 创建加密的CVM镜像
+## 创建加密的cVM镜像
 
-构建并验证`openEuler 24.03 LTS SP1`的`cVM`加密镜像。
+构建并验证`openEuler 24.03 LTS SP1`的cVM加密镜像。
 
 ```
 cd ${FDE_DIR}/image
-sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output image>
+sh create-fde-image.sh -i <input image> -g <image measurement reference> -o <output image> -a ${ATTEST_CASE}
 ```
 >-   -i ：表示cVM镜像。
 >-   -g ：表示cVM镜像组件（grub镜像、grub.cfg 文件、Kernel镜像、initramfs镜像）的参考度量值文件。
 >-   -o ：可选参数，用于指定cVM镜像的输出路径。
+>-   -a ：输入samples 或者 rats-tls 来选择不同的远程证明示例。
 
--   脚本`create-fde-image.sh`将使用加密密钥加密根文件系统，它会创建一个名为`fde`的`dracut`模块，并将`FDE`相关组件例如认证应用`server`、`FDE`代理`fde-agent.sh`和加密工具`cryptsetup`安装到`initramfs`中。内核启动参数会追加`root=/dev/mapper/encroot`（表示加密的根文件系统分区），同时更新`/etc/fstab`以自动挂载加密根分区。
--   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新参考度量值（如 `hash.json`）并将其复制到`${FDE_DIR}/attestation`目录用于认证。
+-   脚本`create-fde-image.sh`将使用加密密钥加密根文件系统，它会创建一个名为`fde`的`dracut`模块，并将`FDE`相关组件例如远程证明程序`virtcca-server`、FDE代理`fde-agent.sh`和加密工具`cryptsetup`安装到`initramfs`中。内核启动参数会追加`root=/dev/mapper/encroot`（表示加密的根文件系统分区），同时更新`/etc/fstab`以自动挂载加密根分区。
+-   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新参考度量值（如 `hash.json`）并将其复制到`${FDE_DIR}/attestation/${ATTEST_CASE}`目录。
 -   默认输出镜像为`${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2`，其磁盘分区如下。
    ![](./doc/disk-partition.png)
     >加密后的根分区/dev/vda2通过LUKS保护。
@@ -49,15 +53,15 @@ sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output i
     export IP_ADDR=192.168.122.150 # ip地址根据实际情况修改
     export PORT=7220
     ```
-2.  `initramfs`中的脚本`fde-agent.sh`会自动执行如下命令, 该命令会通过TMM服务接口获取度量报告（`attestation token`）， 并等待`client`的请求。
+2.  `initramfs`中的脚本`fde-agent.sh`会自动执行如下命令, 该命令会通过TMM服务接口获取度量报告（`attestation token`）， 并等待`virtcca-client`的请求。
 
     ```bash
-    /usr/bin/server -i ${IP_ADDR} -p $PORT -k
+    /usr/bin/virtcca-server -i ${IP_ADDR} -p ${PORT} -k
     ```
-3.  client向server发起请求，获取度量报告， 在本地验证通过后， 再将加密密钥发送到`server`。
+3.  virtcca-client向virtcca-server发起请求，获取度量报告， 在度量报告验证通过后， 再将加密密钥发送到`virtcca-server`。
     ```bash
-    cd ${FDE_DIR}/attestation
-    ./client -i ${IP_ADDR} -p $PORT -m <measurement> -f hash.json -k rootfs_key.bin 
+    cd ${FDE_DIR}/attestation/${ATTEST_CASE}
+    ./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f hash.json -k rootfs_key.bin 
     ```
     >其中-m 为cVM基线度量值。
 4.  脚本`fde-agent.sh`会自动执行如下命令，使用加密密钥解密根文件系统并挂载。
