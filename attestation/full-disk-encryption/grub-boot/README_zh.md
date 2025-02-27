@@ -57,7 +57,7 @@ sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output i
 3.  client向server发起请求，获取度量报告， 在本地验证通过后， 再将加密密钥发送到`server`。
     ```bash
     cd ${FDE_DIR}/attestation
-    ./client -i <ip> -p <port> -m <measurement> -f hash.json -k rootfs_key.bin 
+    ./client -i ${IP_ADDR} -p $PORT -m <measurement> -f hash.json -k rootfs_key.bin 
     ```
     >其中-m 为cVM基线度量值。
 4.  脚本`fde-agent.sh`会自动执行如下命令，使用加密密钥解密根文件系统并挂载。
