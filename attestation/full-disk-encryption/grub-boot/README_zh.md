@@ -25,7 +25,7 @@ sh pre-fde.sh
 
 ## 创建加密的CVM镜像
 
-构建并验证openEuler 24.03 cVM镜像。
+构建并验证`openEuler 24.03 LTS SP1`的`cVM`加密镜像。
 
 ```
 cd ${FDE_DIR}/image
