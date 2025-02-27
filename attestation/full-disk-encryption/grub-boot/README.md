@@ -32,7 +32,7 @@ Script `pre-fde.sh` will check the existence of key file for image encryption. I
 
 ## Create encrypted CVM image
 
-We build the openEuler 24.03 CVM image and validate it. 
+We build the openEuler 24.03 LTS SP1 CVM image and validate it. 
 
 ```shell
 cd ${FDE_DIR}/image
