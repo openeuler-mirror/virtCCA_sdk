@@ -36,7 +36,7 @@ We build the openEuler 24.03 CVM image and validate it.
 
 ```shell
 cd ${FDE_DIR}/image
-sh create_fde_image.sh -i <guest image> -g <reference measurements> -o <output image>
+sh create-fde-image.sh -i <guest image> -g <reference measurements> -o <output image>
 ```
 
 Script `create_fde_image.sh` will encrypt the root filesystem with the encryption key. It will create a dracut module called `fde` and install FDE releated components into the initrd, such as attestation app `server`, FDE agent `fde-agent.sh` and crypt binary `cryptsetup`. The kernel cmdline is appened with the parameter `root=/dev/mapper/encroot`, which represents the encrypted rootfs partition. Also `\etc\fstab` is updated to append the above parameter to auto-mount encrypted rootfs. 
