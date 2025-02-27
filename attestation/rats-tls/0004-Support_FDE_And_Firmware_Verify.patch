@@ -1,0 +1,3998 @@
+From f09a53225eb50d2137f9346e0b204231a1d3db75 Mon Sep 17 00:00:00 2001
+From: unholyzero <576175933@qq.com>
+Date: Thu, 27 Feb 2025 18:56:38 +0800
+Subject: [PATCH] add_fde
+
+---
+ samples/virtcca-client/CMakeLists.txt         |   13 +-
+ samples/virtcca-client/binary_blob.c          |  152 +++
+ samples/virtcca-client/config.c               |   11 +
+ samples/virtcca-client/ima_measure.c          |  226 ++--
+ samples/virtcca-client/inc/binary_blob.h      |   26 +
+ samples/virtcca-client/inc/common.h           |   37 +
+ samples/virtcca-client/inc/config.h           |   15 +
+ samples/virtcca-client/inc/hash_defs.h        |   15 +
+ samples/virtcca-client/inc/ima_measure.h      |    9 +
+ samples/virtcca-client/inc/rem.h              |   19 +
+ samples/virtcca-client/inc/vcca_event_log.h   |   92 ++
+ .../virtcca-client/inc/vcca_firmware_state.h  |   70 ++
+ samples/virtcca-client/inc/verify.h           |   39 +
+ samples/virtcca-client/rats-client.c          | 1080 ++++++++++++++---
+ samples/virtcca-client/rem.c                  |   29 +
+ samples/virtcca-client/utils/inc/utils.h      |    6 +
+ samples/virtcca-client/utils/src/utils.c      |  113 ++
+ samples/virtcca-client/vcca_event_log.c       |  524 ++++++++
+ samples/virtcca-client/vcca_firmware_state.c  |  285 +++++
+ samples/virtcca-client/verify.c               |  362 ++++++
+ samples/virtcca-server/CMakeLists.txt         |    3 +-
+ samples/virtcca-server/rats-server.c          |  207 +++-
+ src/attesters/virtcca/collect_evidence.c      |    2 +-
+ src/verifiers/virtcca/token_parse.h           |    1 +
+ src/verifiers/virtcca/verify_evidence.c       |    4 +
+ 25 files changed, 3027 insertions(+), 313 deletions(-)
+ create mode 100644 samples/virtcca-client/binary_blob.c
+ create mode 100644 samples/virtcca-client/config.c
+ create mode 100644 samples/virtcca-client/inc/binary_blob.h
+ create mode 100644 samples/virtcca-client/inc/common.h
+ create mode 100644 samples/virtcca-client/inc/config.h
+ create mode 100644 samples/virtcca-client/inc/hash_defs.h
+ create mode 100644 samples/virtcca-client/inc/rem.h
+ create mode 100644 samples/virtcca-client/inc/vcca_event_log.h
+ create mode 100644 samples/virtcca-client/inc/vcca_firmware_state.h
+ create mode 100644 samples/virtcca-client/inc/verify.h
+ create mode 100644 samples/virtcca-client/rem.c
+ create mode 100644 samples/virtcca-client/vcca_event_log.c
+ create mode 100644 samples/virtcca-client/vcca_firmware_state.c
+ create mode 100644 samples/virtcca-client/verify.c
+
+diff --git a/samples/virtcca-client/CMakeLists.txt b/samples/virtcca-client/CMakeLists.txt
+index 06179e4..def8e0c 100644
+--- a/samples/virtcca-client/CMakeLists.txt
++++ b/samples/virtcca-client/CMakeLists.txt
+@@ -10,8 +10,10 @@ set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include/rats-tls
+                     ${RATS_TLS_INSTALL_INCLUDE_PATH}
+                     ${RATS_TLS_INSTALL_INCLUDE_PATH}/edl
++                    ${CMAKE_CURRENT_SOURCE_DIR}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/inc
+                     ${CMAKE_CURRENT_SOURCE_DIR}/t_cose/inc
++                    ${CMAKE_CURRENT_SOURCE_DIR}/utils/inc
+                     )
+ set(LIBRARY_DIRS ${RATS_TLS_INSTALL_LIB_PATH})
+ 
+@@ -20,7 +22,16 @@ include_directories(${INCLUDE_DIRS})
+ link_directories(${LIBRARY_DIRS})
+ 
+ # Set source file
+-set(SOURCES rats-client.c token_parse.c token_validate.c ima_measure.c)
++set(SOURCES rats-client.c 
++           token_parse.c 
++           token_validate.c 
++           ima_measure.c
++           vcca_event_log.c
++           rem.c
++           vcca_firmware_state.c
++           binary_blob.c
++           verify.c
++           config.c)
+ 
+ # Generate bin file
+ add_executable(${PROJECT_NAME} ${SOURCES})
+diff --git a/samples/virtcca-client/binary_blob.c b/samples/virtcca-client/binary_blob.c
+new file mode 100644
+index 0000000..12ec1ee
+--- /dev/null
++++ b/samples/virtcca-client/binary_blob.c
+@@ -0,0 +1,152 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include "inc/binary_blob.h"
++#include "utils.h"
++
++bool binary_blob_init(binary_blob_t* blob, uint8_t* data, size_t length, size_t base)
++{
++    if (!blob || !data || length == 0) {
++        return false;
++    }
++
++    blob->data = data;
++    blob->length = length;
++    blob->base_address = base;
++
++    return true;
++}
++
++static bool check_boundary(const binary_blob_t* blob, size_t* pos, size_t size)
++{
++    if (!blob || !pos || *pos + size > blob->length) {
++        printf("DEBUG: Boundary check failed: pos=%zu, size=%zu, blob_length=%zu\n",
++               *pos, size, blob ? blob->length : 0);
++        return false;
++    }
++    return true;
++}
++
++uint16_t binary_blob_get_uint16(const binary_blob_t* blob, size_t* pos)
++{
++    uint16_t value = 0;
++    
++    if (!check_boundary(blob, pos, sizeof(uint16_t))) {
++        return 0;
++    }
++
++    /* Little-endian read */
++    value = (uint16_t)blob->data[*pos] |
++            ((uint16_t)blob->data[*pos + 1] << 8);
++    
++    *pos += sizeof(uint16_t);
++    return value;
++}
++
++uint8_t binary_blob_get_uint8(const binary_blob_t* blob, size_t* pos)
++{
++    if (!check_boundary(blob, pos, sizeof(uint8_t))) {
++        return 0;
++    }
++
++    uint8_t value = blob->data[*pos];
++    *pos += sizeof(uint8_t);
++    return value;
++}
++
++uint32_t binary_blob_get_uint32(const binary_blob_t* blob, size_t* pos)
++{
++    uint32_t value = 0;
++    if (!check_boundary(blob, pos, sizeof(uint32_t))) {
++        return 0;
++    }
++
++    memcpy(&value, &blob->data[*pos], sizeof(uint32_t));
++    *pos += sizeof(uint32_t);
++    return value;
++}
++
++uint64_t binary_blob_get_uint64(const binary_blob_t* blob, size_t* pos)
++{
++    uint64_t value = 0;
++    
++    if (!check_boundary(blob, pos, sizeof(uint64_t))) {
++        return 0;
++    }
++
++    /* Little-endian read */
++    for (int i = 0; i < 8; i++) {
++        value |= ((uint64_t)blob->data[*pos + i] << (i * 8));
++    }
++    
++    *pos += sizeof(uint64_t);
++    return value;
++}
++
++void binary_blob_get_bytes(const binary_blob_t* blob, size_t* pos, size_t count, uint8_t* out)
++{
++    if (!check_boundary(blob, pos, count) || !out) {
++        memset(out, 0, count);
++        return;
++    }
++
++    memcpy(out, &blob->data[*pos], count);
++    *pos += count;
++}
++
++void binary_blob_dump(const binary_blob_t* blob)
++{
++    if (!blob || !blob->data) {
++        return;
++    }
++
++    printf("Binary Data:\n");
++    printf("Base Address: 0x%zX\n", blob->base_address);
++    printf("Length: %zu bytes\n\n", blob->length);
++
++    char ascii_buf[17] = {0};
++    size_t i;
++
++    for (i = 0; i < blob->length; i++) {
++        /* Check if encountered consecutive 0xFF */
++        if (blob->data[i] == 0xFF) {
++            size_t j;
++            for (j = i + 1; j < blob->length && j < i + 32; j++) {
++                if (blob->data[j] != 0xFF) break;
++            }
++            if (j == i + 32) {
++                /* Print ASCII part of the last line */
++                if (i % 16 != 0) {
++                    for (size_t k = i % 16; k < 16; k++) {
++                        printf("   ");
++                    }
++                    printf("  %s\n", ascii_buf);
++                }
++                printf("\n[Remaining data omitted - all 0xFF]\n");
++                return;
++            }
++        }
++
++        if (i % 16 == 0) {
++            if (i > 0) {
++                printf("  %s\n", ascii_buf);
++            }
++            printf("%08zX  ", blob->base_address + i);
++            memset(ascii_buf, 0, sizeof(ascii_buf));
++        }
++
++        printf("%02X ", blob->data[i]);
++        ascii_buf[i % 16] = isprint(blob->data[i]) ? blob->data[i] : '.';
++    }
++
++    /* Print last line */
++    if (i % 16 != 0) {
++        for (size_t j = i % 16; j < 16; j++) {
++            printf("   ");
++        }
++    }
++    printf("  %s\n", ascii_buf);
++}
+\ No newline at end of file
+diff --git a/samples/virtcca-client/config.c b/samples/virtcca-client/config.c
+new file mode 100644
+index 0000000..e712df3
+--- /dev/null
++++ b/samples/virtcca-client/config.c
+@@ -0,0 +1,11 @@
++#include "config.h"
++
++#define CCEL_ACPI_TABLE_PATH "./ccel.bin"
++#define CCEL_EVENT_LOG_PATH "./event_log.bin"
++
++/* Global configuration variable definition */
++config_t g_config = {
++    .ccel_file = CCEL_ACPI_TABLE_PATH,
++    .event_log_file = CCEL_EVENT_LOG_PATH,
++    .json_file = NULL  /* Will be set from command line */
++}; 
+\ No newline at end of file
+diff --git a/samples/virtcca-client/ima_measure.c b/samples/virtcca-client/ima_measure.c
+index bec95b4..60d7310 100644
+--- a/samples/virtcca-client/ima_measure.c
++++ b/samples/virtcca-client/ima_measure.c
+@@ -31,24 +31,34 @@ static int display_digest(u_int8_t *digest, u_int32_t digestlen)
+ 
+ static int ima_eventdigest_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
++	if (buflen < SHA_DIGEST_LENGTH) {
++		printf("invalid len %u\n", buflen);
++		return -1;
++	}
+ 	return display_digest(buffer, SHA_DIGEST_LENGTH);
+ }
+ 
+ static int ima_eventdigest_ng_parse(u_int8_t *buffer, u_int32_t buflen, u_int8_t *file_digest, u_int32_t *file_digest_len)
+ {
+ 	char hash_algo[CRYPTO_MAX_ALG_NAME + 1] = { 0 };
+-	int algo_len = strlen((char *)buffer) - 1; /* format: algo + ':' + '\0' */
++	int algo_len;
+ 	const EVP_MD *md;
+ 	int digest_len;
+ 
+-	if (algo_len > CRYPTO_MAX_ALG_NAME) {
+-		printf("Hash algorithm name too long\n");
++	if (buflen > CRYPTO_MAX_ALG_NAME + 1) {
++		printf("invalid algo name\n");
+ 		return ERROR_ENTRY_PARSING;
+ 	}
+ 
++	algo_len = strnlen((char *)buffer, buflen); /* format: algo + ':' + '\0' */
++	if (algo_len <= 1) {
++		printf("Hash algorithm name invalid\n");
++		return ERROR_ENTRY_PARSING;
++	}
++	algo_len--;
+ 	printf("%s", buffer);
+-
+ 	memcpy(hash_algo, buffer, algo_len);
++
+ 	md = EVP_get_digestbyname(hash_algo);
+ 	if (md == NULL) {
+ 		printf("Unknown hash algorithm '%s'\n", hash_algo);
+@@ -212,6 +222,12 @@ static int parse_template_data(struct event *template)
+ 				 sizeof(u_int32_t));
+ 			offset += sizeof(u_int32_t);
+ 		}
++
++		if (offset >= template->template_data_len ||
++			field_len > template->template_data_len - offset) {
++			printf("offset or field len is invalid\n");
++			goto out;
++		}
+ 		result = field->field_parse(template->template_data + offset,
+ 					    field_len, template->file_digest, &template->file_digest_len);
+ 		if (result) {
+@@ -233,11 +249,14 @@ out:
+ static int read_template_data(struct event *template, FILE *fp)
+ {
+ 	int len, is_ima_template;
+-	int byte_read;
+ 
+ 	is_ima_template = strcmp(template->name, "ima") == 0 ? 1 : 0;
+ 	if (!is_ima_template) {
+-		byte_read = fread(&template->template_data_len, sizeof(u_int32_t), 1, fp);
++		if (fread(&template->template_data_len, sizeof(u_int32_t), 1, fp) != 1 ||
++			template->template_data_len > IMA_TEMPLATE_DATA_MAX_LEN) {
++			printf("ERROR: read length faild or length is invalid\n");
++			return -EINVAL;
++		}
+ 		len = template->template_data_len;
+ 	} else {
+ 		template->template_data_len = SHA_DIGEST_LENGTH +
+@@ -256,48 +275,105 @@ static int read_template_data(struct event *template, FILE *fp)
+ 		return -ENOMEM;
+ 	}
+ 
+-	byte_read = fread(template->template_data, len, 1, fp);
++	if (fread(template->template_data, len, 1, fp) != 1) {
++		printf("ERROR: read template data failed\n");
++		goto free;
++	}
++
+ 	if (is_ima_template) {	/* finish 'ima' template data read */
+ 		u_int32_t field_len;
+-
+-		byte_read = fread(&field_len, sizeof(u_int32_t), 1, fp);
+-		byte_read = fread(template->template_data + SHA_DIGEST_LENGTH,
+-		      field_len, 1, fp);
++		if (fread(&field_len, sizeof(u_int32_t), 1, fp) != 1 || field_len > TCG_EVENT_NAME_LEN_MAX) {
++			printf("ERROR: read template data failed\n");
++			goto free;
++		}
++		if (fread(template->template_data + SHA_DIGEST_LENGTH, field_len, 1, fp) != 1) {
++			printf("ERROR: read digest failed\n");
++			goto free;
++		}
+ 	}
+ 	return 0;
+-}
+ 
+-/*
+- * Calculate the sha1 hash of data
+- */
+-static void calc_digest(u_int8_t *digest, int len, void *data)
+-{
+-	SHA_CTX c;
+-
+-	/* Calc template hash for an ima entry */
+-	memset(digest, 0, sizeof(*digest));
+-	SHA1_Init(&c);
+-	SHA1_Update(&c, data, len);
+-	SHA1_Final(digest, &c);
++free:
++	free(template->template_data);
++	return -1;
+ }
+ 
+-static int verify_template_hash(struct event *template)
++static int verify_template_hash(struct event *template_digest)
+ {
+ 	int rc;
++	u_int8_t digest[SHA_DIGEST_LENGTH] = {0};
++	int len = SHA_DIGEST_LENGTH;
+ 
+-	rc = memcmp(fox, template->header.digest, sizeof(fox));
++	rc = memcmp(fox, template_digest, sizeof(fox));
+ 	if (rc != 0) {
+-		u_int8_t digest[SHA_DIGEST_LENGTH];
+-		memset(digest, 0, sizeof(digest));
+-		calc_digest(digest, template->template_data_len,
+-			    template->template_data);
+-		rc = memcmp(digest, template->header.digest, sizeof(digest));
++		EVP_Digest(template_digest->template_data, template_digest->template_data_len,
++					digest, &len, EVP_sha1(), NULL);
++		rc = memcmp(digest, template_digest->header.digest, len);
+ 		if (rc != 0)
+ 			printf("- %s\n", "failed");
+ 	}
+ 	return rc != 0 ? 1 : 0 ;
+ }
+ 
++static int check_one_template(struct event *template, FILE *fp, char *digest_list_file,
++	u_int8_t digest[SHA256_DIGEST_LENGTH], bool verify)
++{
++	int ret = -1;
++	char digest_hex[MAX_CMD_LEN * 2] = {0};
++	int hash_failed = 0;
++	int i, len = SHA256_DIGEST_LENGTH;
++
++	display_digest(template->header.digest, SHA_DIGEST_LENGTH);
++	memset(template->name, 0, sizeof(template->name));
++	if (template->header.name_len > TCG_EVENT_NAME_LEN_MAX ||
++		fread(template->name, template->header.name_len, 1, fp) == 0) {
++		RTLS_ERR("Reading name failed\n");
++		return -1;
++	}
++	printf(" %s ", template->name);
++
++	if (read_template_data(template, fp) < 0) {
++		RTLS_ERR("Reading of measurement entry failed\n");
++		return -1;
++	}
++
++	if (parse_template_data(template) != 0) {
++		RTLS_ERR("Parsing of measurement entry failed\n");
++		goto free;
++	}
++
++	for (i = 0; i < template->file_digest_len; i++) {
++		sprintf(digest_hex + i * 2, "%02x", (*(template->file_digest + i) & 0xff));
++	}
++	char cmd_str[MAX_CMD_LEN] = {0};
++	if (template->file_digest_len * 2 + strlen("grep -E -i \"^$\"  > /dev/null") + strlen(digest_list_file) >= MAX_CMD_LEN) {
++		RTLS_ERR("Digest list file name too long.\n");
++		goto free;
++	}
++	sprintf(cmd_str, "grep -E -i \"^%s$\" %s > /dev/null", digest_hex, digest_list_file);
++	if (system(cmd_str) != 0) {
++		RTLS_ERR("Failed to verify file hash.\n");
++		goto free;
++	}
++
++	if (verify) {
++		if (verify_template_hash(template) != 0) {
++			hash_failed++;
++		}
++	}
++
++	if (EVP_Digest(template->template_data, template->template_data_len,
++		digest, &len, EVP_sha256(), NULL) != 1) {
++		RTLS_ERR("Failed to verify file hash.\n");
++		goto free;
++	}
++	ret = hash_failed;
++
++free:
++	free(template->template_data);
++	return ret;
++}
++
+ /*
+  * calculate the SHA1 aggregate-pcr value based on the
+  * IMA runtime binary measurements.
+@@ -330,13 +406,13 @@ static int verify_template_hash(struct event *template)
+  */
+ int ima_measure(void *data, size_t datalen, char *digest_list_file, int validate, int verify)
+ {
+-	int ret;
++	int ret = 0;
+ 	FILE *fp;
+ 	struct event template;
+-	u_int8_t pcr[SHA256_DIGEST_LENGTH];
++	u_int8_t pcr[SHA256_DIGEST_LENGTH * 2], digest[SHA256_DIGEST_LENGTH];
+ 	int i, count = 0;
+ 	int hash_failed = 0;
+-	size_t byte_read;
++	unsigned int tmp_len = SHA256_DIGEST_LENGTH;
+ 	
+ 	fp = fopen(IMA_MEASUREMENTS_PATH, "r");
+ 	if (!fp) {
+@@ -344,87 +420,49 @@ int ima_measure(void *data, size_t datalen, char *digest_list_file, int validate
+ 		perror("Unable to open file\n");
+ 		return 1;
+ 	}
+-	memset(pcr, 0, SHA256_DIGEST_LENGTH);	/* initial PCR content 0..0 */
++	memset(pcr, 0, SHA256_DIGEST_LENGTH * 2);	/* initial PCR content 0..0 */
++	memset(digest, 0, SHA256_DIGEST_LENGTH);
+ 	memset(zero, 0, SHA_DIGEST_LENGTH);
+ 	memset(fox, 0xff, SHA_DIGEST_LENGTH);
+ 
+ 	printf("### PCR HASH                                  "
+ 		   "TEMPLATE-NAME\n");
++
++#if OPENSSL_VERSION_NUMBER <= OPENSSL_1_1_0
++	OpenSSL_add_all_digests();
++#endif
++
+ 	while (fread(&template.header, sizeof(template.header), 1, fp)) {
+ 		printf("%3d %03u ", count++, template.header.pcr);
+-		display_digest(template.header.digest, SHA_DIGEST_LENGTH);
+-		memset(template.name, 0, sizeof(template.name));
+-		byte_read = fread(template.name, template.header.name_len, 1, fp);
+-		printf(" %s ", template.name);
+ 
+-		if (read_template_data(&template, fp) < 0) {
+-			RTLS_ERR("Reading of measurement entry failed\n");
++		ret = check_one_template(&template, fp, digest_list_file, digest, verify);
++		if (ret < 0) {
++			printf("check this template failed\n");
+ 			break;
+ 		}
+-
+-		if (parse_template_data(&template) != 0) {
+-			RTLS_ERR("Parsing of measurement entry failed\n");
+-		}
+-
+-		char digest_hex[MAX_CMD_LEN * 2] = {0};
+-		int i;
+-		for (i = 0; i < template.file_digest_len; i++) {
+-			sprintf(digest_hex + i * 2, "%02x", (*(template.file_digest + i) & 0xff));
+-		}
+-		char cmd_str[MAX_CMD_LEN] = {0};
+-		if (template.file_digest_len * 2 + strlen("grep -E -i \"^$\"  > /dev/null") + strlen(digest_list_file) >= MAX_CMD_LEN) {
+-			printf("Digest list file name too long.\n");
+-			return 1;
+-		}
+-		sprintf(cmd_str, "grep -E -i \"^%s$\" %s > /dev/null", digest_hex, digest_list_file);
+-		ret = system(cmd_str);
+-		if (ret != 0) {
+-			printf("Failed to verify file hash.\n");
+-			return 1;
+-		}
+-
+-		/* Calc template hash for an ima entry */
+-		SHA256_CTX sha256_ctx;
+-		u_int8_t digest[SHA256_DIGEST_LENGTH] = {0};
+-		SHA256_Init(&sha256_ctx);
+-		SHA256_Update(&sha256_ctx, template.template_data, template.template_data_len);
+-		SHA256_Final(digest, &sha256_ctx);
+-
+-		if (verify) {
+-			if (verify_template_hash(&template) != 0) {
+-				hash_failed++;
+-			}
+-		}
++		hash_failed += ret;
+ 		printf("\n");
+-		free(template.template_data);
+ 
+ 		/* Extend simulated PCR with new template digest */
+-		SHA256_CTX c;
+-		SHA256_Init(&c);
+-		SHA256_Update(&c, pcr, SHA256_DIGEST_LENGTH);
+ 		if (validate) {
+ 			if (memcmp(template.header.digest, zero, SHA_DIGEST_LENGTH) == 0)
+ 				memset(template.header.digest, 0xFF, SHA_DIGEST_LENGTH);
+ 		}
+-		
+-		memset(extend, 0, SHA256_DIGEST_LENGTH);
+-		memcpy(extend, digest, SHA256_DIGEST_LENGTH);
+-
+-		SHA256_Update(&c, extend, SHA256_DIGEST_LENGTH);
+-		SHA256_Final(pcr, &c);
+ 
+-		OpenSSL_add_all_digests();
+-
+-		if (template.header.name_len > TCG_EVENT_NAME_LEN_MAX) {
+-			printf("%d ERROR: event name too long!\n",
+-			       template.header.name_len);
+-			fclose(fp);
+-			EVP_cleanup();
+-			return 1;
++		memcpy(pcr + SHA256_DIGEST_LENGTH, digest, SHA256_DIGEST_LENGTH);
++		if (EVP_Digest(pcr, 2 * SHA256_DIGEST_LENGTH, digest, &tmp_len, EVP_sha256(), NULL) != 1) {
++			ret = -1;
++			break;
+ 		}
++		memcpy(pcr, digest, tmp_len);
+ 	}
+-	fclose(fp);
++
++#if OPENSSL_VERSION_NUMBER <= OPENSSL_1_1_0
+ 	EVP_cleanup();
++#endif
++	fclose(fp);
++	if (ret < 0)
++		return ret;
+ 
+ 	printf("PCRAggr (re-calculated): ");
+ 	display_digest(pcr, SHA256_DIGEST_LENGTH);
+diff --git a/samples/virtcca-client/inc/binary_blob.h b/samples/virtcca-client/inc/binary_blob.h
+new file mode 100644
+index 0000000..9abbcdb
+--- /dev/null
++++ b/samples/virtcca-client/inc/binary_blob.h
+@@ -0,0 +1,26 @@
++#ifndef BINARY_BLOB_H
++#define BINARY_BLOB_H
++
++#include <stdint.h>
++#include <stddef.h>
++#include <stdbool.h>
++
++#define BYTES_PER_LINE 16
++
++typedef struct {
++    uint8_t* data;
++    size_t length;
++    size_t base_address;
++} binary_blob_t;
++
++/* binary data manipulation function */
++bool binary_blob_init(binary_blob_t* blob, uint8_t* data, size_t length, size_t base);
++uint16_t binary_blob_get_uint16(const binary_blob_t* blob, size_t* pos);
++uint8_t binary_blob_get_uint8(const binary_blob_t* blob, size_t* pos);
++uint32_t binary_blob_get_uint32(const binary_blob_t* blob, size_t* pos);
++uint64_t binary_blob_get_uint64(const binary_blob_t* blob, size_t* pos);
++void binary_blob_get_bytes(const binary_blob_t* blob, size_t* pos, size_t count, uint8_t* out);
++void binary_blob_dump(const binary_blob_t* blob);
++
++
++#endif /* BINARY_BLOB_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/common.h b/samples/virtcca-client/inc/common.h
+new file mode 100644
+index 0000000..dae098f
+--- /dev/null
++++ b/samples/virtcca-client/inc/common.h
+@@ -0,0 +1,37 @@
++#ifndef COMMON_H
++#define COMMON_H
++
++#define CHALLENGE_SIZE (64U)
++#define MAX_MEASUREMENT_SIZE 64
++#define MAX_MEASUREMENT_HEX_SIZE (MAX_MEASUREMENT_SIZE * 2)
++#define MAX 4096
++#define MAX_LOG 0x200000 /* 2MB */
++#define PORT 7220
++#define VERIFY_SUCCESS 0
++#define VERIFY_FAILED 1
++#define VERIFY_CONTINUE 2
++
++enum MSG_ID {
++    DEVICE_CERT_MSG_ID = 0x1001,
++    ATTEST_MSG_ID,
++    CCEL_ACPI_TABLE_ID,
++    CCEL_EVENT_LOG_ID,
++    VERIFY_SUCCESS_MSG_ID,
++    VERIFY_FAILED_MSG_ID,
++    VERIFY_REM_MSG_ID
++};
++
++typedef struct {
++    uint32_t ip;
++    uint16_t port;
++    uint8_t measurement[MAX_MEASUREMENT_SIZE];
++    uint32_t meas_len;
++    uint8_t challenge[CHALLENGE_SIZE];
++} client_args;
++
++typedef struct {
++    uint32_t ip;
++    uint16_t port;
++} server_args;
++
++#endif /* COMMON_H */
+diff --git a/samples/virtcca-client/inc/config.h b/samples/virtcca-client/inc/config.h
+new file mode 100644
+index 0000000..69116ca
+--- /dev/null
++++ b/samples/virtcca-client/inc/config.h
+@@ -0,0 +1,15 @@
++#ifndef CONFIG_H
++#define CONFIG_H
++
++#include <stddef.h>
++
++typedef struct {
++    const char* ccel_file;      /* CCEL file path */
++    const char* event_log_file; /* Event log file path */
++    const char* rem_file;       /* REM file path */
++    const char* json_file;      /* JSON reference file path */
++} config_t;
++
++extern config_t g_config;
++
++#endif /* CONFIG_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/hash_defs.h b/samples/virtcca-client/inc/hash_defs.h
+new file mode 100644
+index 0000000..28515e8
+--- /dev/null
++++ b/samples/virtcca-client/inc/hash_defs.h
+@@ -0,0 +1,15 @@
++#ifndef HASH_DEFS_H
++#define HASH_DEFS_H
++
++/* If the OpenSSL header file is available, use its definition */
++#ifdef OPENSSL_SHA_H
++#include <openssl/sha.h>
++#else
++/* Otherwise use our own definition */
++#define SHA1_DIGEST_LENGTH   20
++#define SHA256_DIGEST_LENGTH 32
++#define SHA384_DIGEST_LENGTH 38
++#define SHA512_DIGEST_LENGTH 64
++#endif
++
++#endif /* HASH_DEFS_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/ima_measure.h b/samples/virtcca-client/inc/ima_measure.h
+index a481850..b113721 100644
+--- a/samples/virtcca-client/inc/ima_measure.h
++++ b/samples/virtcca-client/inc/ima_measure.h
+@@ -1,9 +1,16 @@
++#ifndef IMA_MEASURE_H
++#define IMA_MEASURE_H
++
++#include <limits.h>
++
+ #define TCG_EVENT_NAME_LEN_MAX	255
+ #define IMA_TEMPLATE_FIELD_ID_MAX_LEN	16
+ #define IMA_TEMPLATE_NUM_FIELDS_MAX	15
+ #define CRYPTO_MAX_ALG_NAME 64
+ #define IMA_MAX_HASH_SIZE 64
+ #define MAX_CMD_LEN 1024
++#define IMA_TEMPLATE_DATA_MAX_LEN (IMA_MAX_HASH_SIZE + PATH_MAX)
++#define OPENSSL_1_1_0 0x10100000L
+ 
+ #define IMA_TEMPLATE_IMA_NAME "ima"
+ #define IMA_TEMPLATE_IMA_FMT "d|n"
+@@ -17,3 +24,5 @@
+ 
+ 
+ int ima_measure(void *data, size_t datalen, char *digest_list_file, int validate, int verify);
++
++#endif
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/rem.h b/samples/virtcca-client/inc/rem.h
+new file mode 100644
+index 0000000..b85bb0c
+--- /dev/null
++++ b/samples/virtcca-client/inc/rem.h
+@@ -0,0 +1,19 @@
++#ifndef REM_H
++#define REM_H
++
++#include <stdint.h>
++#include <stdbool.h>
++
++#define REM_COUNT 4
++#define REM_LENGTH_BYTES 32
++
++typedef struct {
++    uint8_t data[REM_LENGTH_BYTES];
++} rem_t;
++
++/* REM operation function */
++bool rem_init(rem_t* rem);
++bool rem_compare(const rem_t* rem1, const rem_t* rem2);
++void rem_dump(const rem_t* rem);
++
++#endif /* REM_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/vcca_event_log.h b/samples/virtcca-client/inc/vcca_event_log.h
+new file mode 100644
+index 0000000..f34ef94
+--- /dev/null
++++ b/samples/virtcca-client/inc/vcca_event_log.h
+@@ -0,0 +1,92 @@
++#ifndef VCCA_EVENT_LOG_H
++#define VCCA_EVENT_LOG_H
++
++#include <stdint.h>
++#include "rem.h"
++#include "binary_blob.h"
++#include "hash_defs.h"
++#include "utils.h"
++
++/* SHA256 digest length (32 bytes) */
++#define SHA256_DIGEST_LENGTH 32
++
++/* Add hash algorithm definitions */
++#define TPM_ALG_ERROR 0x0
++#define TPM_ALG_RSA   0x1
++#define TPM_ALG_SHA1  0x4
++#define TPM_ALG_SHA256 0xB
++#define TPM_ALG_SHA384 0xC
++#define TPM_ALG_SHA512 0xD
++#define TPM_ALG_ECDSA 0x18
++
++/* Algorithm information structure */
++typedef struct {
++    uint16_t algoid;
++    uint16_t digestsize;
++} algorithm_info_t;
++
++/* Event type definitions */
++typedef enum {
++    EV_PREBOOT_CERT = 0x0,
++    EV_POST_CODE = 0x1,
++    EV_UNUSED = 0x2,
++    EV_NO_ACTION = 0x3,
++    EV_SEPARATOR = 0x4,
++    EV_ACTION = 0x5,
++    EV_EVENT_TAG = 0x6,
++    EV_S_CRTM_CONTENTS = 0x7,
++    EV_S_CRTM_VERSION = 0x8,
++    EV_CPU_MICROCODE = 0x9,
++    EV_PLATFORM_CONFIG_FLAGS = 0xa,
++    EV_TABLE_OF_DEVICES = 0xb,
++    EV_COMPACT_HASH = 0xc,
++    EV_IPL = 0xd,
++    EV_IPL_PARTITION_DATA = 0xe,
++    EV_NONHOST_CODE = 0xf,
++    EV_NONHOST_CONFIG = 0x10,
++    EV_NONHOST_INFO = 0x11,
++    EV_OMIT_BOOT_DEVICE_EVENTS = 0x12,
++
++    /* TCG EFI Platform Specification For TPM Family 1.1 or 1.2 */
++    EV_EFI_EVENT_BASE = 0x80000000,
++    EV_EFI_VARIABLE_DRIVER_CONFIG = EV_EFI_EVENT_BASE + 0x1,
++    EV_EFI_VARIABLE_BOOT = EV_EFI_EVENT_BASE + 0x2,
++    EV_EFI_BOOT_SERVICES_APPLICATION = EV_EFI_EVENT_BASE + 0x3,
++    EV_EFI_BOOT_SERVICES_DRIVER = EV_EFI_EVENT_BASE + 0x4,
++    EV_EFI_RUNTIME_SERVICES_DRIVER = EV_EFI_EVENT_BASE + 0x5,
++    EV_EFI_GPT_EVENT = EV_EFI_EVENT_BASE + 0x6,
++    EV_EFI_ACTION = EV_EFI_EVENT_BASE + 0x7,
++    EV_EFI_PLATFORM_FIRMWARE_BLOB = EV_EFI_EVENT_BASE + 0x8,
++    EV_EFI_HANDOFF_TABLES = EV_EFI_EVENT_BASE + 0x9,
++    EV_EFI_VARIABLE_AUTHORITY = EV_EFI_EVENT_BASE + 0xe0
++} vcca_event_type_t;
++
++typedef struct {
++    uint32_t rem_index;
++    uint32_t event_type;
++    uint32_t digest_count;
++    uint16_t* alg_ids;  /* Algorithm ID for each digest */
++    uint8_t* digests;   /* Data for all digests */
++    uint32_t event_size;
++    uint8_t* event;
++    uint32_t algorithms_number;  /* Number of algorithms */
++    algorithm_info_t* algorithms;  /* Array of algorithm information */
++} vcca_event_log_entry_t;
++
++typedef struct {
++    binary_blob_t blob;
++    size_t log_base;
++    size_t log_length;
++    rem_t rems[REM_COUNT];
++} vcca_event_log_t;
++
++/* Event log operation functions */
++bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length);
++bool vcca_event_log_process(vcca_event_log_t* log);
++bool vcca_event_log_replay(vcca_event_log_t* log);
++void vcca_event_log_dump(vcca_event_log_t* log);
++
++/* Internal function declarations */
++bool process_event_log_entry(vcca_event_log_t* log, size_t* pos, vcca_event_log_entry_t* entry);
++
++#endif /* VCCA_EVENT_LOG_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/vcca_firmware_state.h b/samples/virtcca-client/inc/vcca_firmware_state.h
+new file mode 100644
+index 0000000..56bd2fb
+--- /dev/null
++++ b/samples/virtcca-client/inc/vcca_firmware_state.h
+@@ -0,0 +1,70 @@
++#ifndef VCCA_FIRMWARE_STATE_H
++#define VCCA_FIRMWARE_STATE_H
++
++#include <stdint.h>
++#include <stdbool.h>
++#include "vcca_event_log.h"
++
++/* EFI state structure */
++typedef struct {
++    uint8_t* image_hash;
++    uint32_t image_hash_size;
++    char* image_path;
++} vcca_efi_image_t;
++
++typedef struct {
++    vcca_efi_image_t* images;
++    uint32_t image_count;
++} vcca_efi_state_t;
++
++/* GRUB conf state structure */
++typedef struct {
++    uint8_t* config_hash;
++    uint32_t config_hash_size;
++} vcca_grub_state_t;
++
++/* Linux kernel state structure */
++typedef struct {
++    uint8_t* kernel_hash;
++    uint32_t kernel_hash_size;
++    uint8_t* initrd_hash;
++    uint32_t initrd_hash_size;
++} vcca_linux_kernel_state_t;
++
++/* Firmware log state structure */
++typedef struct {
++    vcca_efi_state_t* efi;
++    vcca_grub_state_t* grub;
++    vcca_linux_kernel_state_t* linux_kernel;
++    vcca_event_log_entry_t* raw_events;
++    uint32_t raw_events_count;
++    uint16_t hash_algo;
++} vcca_firmware_log_state_t;
++
++/* JSON parsing state */
++typedef struct {
++    char* grub;
++    char* grub_cfg;
++    char* kernel;
++    char* initramfs;
++    char* hash_alg;
++} firmware_reference_t;
++
++/* ACPI table parsing structure */
++typedef struct {
++    uint8_t revision;
++    uint8_t checksum;
++    char oem_id[6];
++    uint8_t cc_type;
++    uint8_t cc_subtype;
++    uint64_t log_length;
++    uint64_t log_address;
++} acpi_table_info_t;
++
++/* Function declarations */
++vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log);
++void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state);
++bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_state_t* state);
++void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state);
++
++#endif /* VCCA_FIRMWARE_STATE_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/verify.h b/samples/virtcca-client/inc/verify.h
+new file mode 100644
+index 0000000..d077537
+--- /dev/null
++++ b/samples/virtcca-client/inc/verify.h
+@@ -0,0 +1,39 @@
++#ifndef VERIFY_H
++#define VERIFY_H
++
++#include <stdbool.h>
++#include "rem.h"
++#include "vcca_event_log.h"
++#include "vcca_firmware_state.h"
++
++/* Internal function declarations */
++bool read_token_rem(rem_t rems[REM_COUNT]);
++void verify_single_rem(int rem_index, const rem_t* rem1, const rem_t* rem2);
++
++/**
++ * @brief Verify firmware state hash values
++ *
++ * @param json_file JSON file path
++ * @param state Firmware state
++ * @return true Verification successful
++ * @return false Verification failed
++ */
++bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_t* state);
++
++/**
++ * @brief Verifying REM Values
++ *
++ * This function performs the following steps:
++ * 1. Read the CCEL file
++ * 2. Obtain the event log area information
++ * 3. Initialize the event log processor
++ * 4. Replay the event log and calculate the REM value
++ * 5. Read the REM value in the token
++ * 6. Verify that the calculated REM value is consistent with the value in the token
++ *
++ * @return true Verification succeeded.
++ * @return false Verification failed.
++ */
++bool verify_rem(void);
++
++#endif /* VERIFY_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/rats-client.c b/samples/virtcca-client/rats-client.c
+index e0a2891..a874999 100644
+--- a/samples/virtcca-client/rats-client.c
++++ b/samples/virtcca-client/rats-client.c
+@@ -13,6 +13,9 @@
+ #include <arpa/inet.h>
+ #include <netinet/in.h>
+ #include <unistd.h>
++#include <termios.h>
++#include <errno.h>
++#include <ctype.h>
+ #include <internal/core.h>
+ #include <rats-tls/api.h>
+ #include <rats-tls/log.h>
+@@ -22,19 +25,77 @@
+ #include "utils.h"
+ #include "ima_measure.h"
+ 
++#include "token_parse.h"
++#include "token_validate.h"
++#include "vcca_event_log.h"
++#include "vcca_firmware_state.h"
++#include "binary_blob.h"
++#include "verify.h"
++#include "config.h"
++
++#include "openssl/rand.h"
++#include "openssl/x509.h"
++#include "openssl/pem.h"
++
+ #define DEFAULT_PORT 1234
+ #define DEFAULT_IP   "127.0.0.1"
+ #define TOKEN "ATTESTATION_PASS"
+ #define REQUEST_IMA_LOG "REQUEST_IMA_LOG"
++#define ENABLE_FDE_TOKEN "ENABLE_FDE_TOKEN"
+ 
+ #define SHA256_SIZE 32
+ #define SHA512_SIZE 64
+ #define MAX_MEASUREMENT_SIZE SHA512_SIZE
++#define MAX_PASSWD_LEN 32
++#define MAX_IMA_LOG_SIZE (1024 * 1024 * 1024)
++#define MAX_LOG 0x200000 /* 2MB */
++#define MAX 4096
++#define CCEL_ACPI_TABLE_PATH "./ccel.bin"
++#define CCEL_EVENT_LOG_PATH "./event_log.bin"
++#define HASH_STR_LENGTH 64
++
++static uint8_t g_rim_ref[MAX_MEASUREMENT_SIZE];
++static size_t g_rim_ref_size = MAX_MEASUREMENT_SIZE;
++
++
++#define CHECK_LENGHT_ASSIGN(src, max_len, dst) \
++do { \
++	if (strnlen(src, max_len) == max_len) { \
++		printf("input param len too long.\n"); \
++		return -1; \
++	} \
++	dst = src; \
++} while(0)
++
++typedef struct {
++	char *attester_type;
++	char *verifier_type;
++	char *tls_type;
++	char *crypto_type;
++	char *srv_ip;
++	char *digest_file;
++	uint16_t port;
++	rats_tls_log_level_t log_level;
++	bool mutual;
++	bool provide_endorsements;
++	bool use_firmware;
++	bool dump_eventlog;
++	char *ref_json_file;
++	bool use_fde;
++	char* rootfs_key_file;
++} client_args;
+ 
+-static uint8_t rim_ref[MAX_MEASUREMENT_SIZE];
+-static size_t rim_ref_size = MAX_MEASUREMENT_SIZE;
+-static uint8_t digest_list_file[PATH_MAX];
+-static uint8_t digest_list_file_size = 0;
++/* Forward declarations */
++static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
++static char* extract_json_string(const char* json, const char* key);
++static bool parse_json_file(const char* filename, firmware_reference_t* ref);
++static void free_firmware_reference(firmware_reference_t* ref);
++static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
++                                 const uint8_t* actual_hash, size_t hash_size);
++static int parse_input_args(int argc, char **argv, client_args *args);
++static bool verify_firmware_state_local(const char* json_file, const vcca_firmware_log_state_t* state);
++static int request_and_save_firmware_data(rats_tls_handle handle);
++static int handle_eventlogs_command(void);
+ 
+ int user_callback(void *args)
+ {
+@@ -44,43 +105,134 @@ int user_callback(void *args)
+ 	size_t byte_write;
+ 	int validate = 1;
+ 	int verify = 1;
++	rtls_core_context_t *ctx = (rtls_core_context_t *)ev;
++	client_args *client_config = NULL;
++	rats_tls_handle handle = ctx;
+ 
++	RTLS_INFO("Entering user_callback function");
++	
++	/* Try to get client_config from core context */
++	if (ctx && ctx->config.custom_claims && ctx->config.custom_claims->value) {
++		client_config = (client_args *)ctx->config.custom_claims->value;
++		RTLS_DEBUG("Got client_config from ctx->config");
++	}
++
++	RTLS_INFO("Context check: ctx=%p, client_config=%p", ctx, client_config);
++	
++	/* Step 1: Parse and verify token regardless of client_config */
++	RTLS_DEBUG("Starting token verification");
+ 	cca_token_t token = {0};
+ 	cca_token_buf_t cca_token_buf = {0};
+ 	memcpy(&cca_token_buf, ev->cca.evidence, ev->cca.evidence_sz);
+-	int i;
++	
+ 	ret = parse_cca_attestation_token(&token, cca_token_buf.buf, cca_token_buf.buf_size);
+-    if (ret != VIRTCCA_SUCCESS) {
+-        RTLS_ERR("failed to parse virtcca token\n");
+-        return ENCLAVE_VERIFIER_ERR_CBOR;
+-    }
++	if (ret != VIRTCCA_SUCCESS) {
++		RTLS_ERR("failed to parse virtcca token\n");
++		return ENCLAVE_VERIFIER_ERR_CBOR;
++	}
++	RTLS_DEBUG("Token parsed successfully");
+ 
+ 	cert_info_t cert_info;
+-	/* TODO: Read config files that includes certs path, rim, etc. */
++	/* Set up certificate info */
+ 	strcpy(cert_info.cert_path_prefix, DEFAULT_CERT_PEM_PREFIX);
+-    strcpy(cert_info.root_cert_filename, DEFAULT_ROOT_CERT_PEM_FILENAME);
+-    strcpy(cert_info.sub_cert_filename, DEFAULT_SUB_CERT_PEM_FILENAME);
+-    strcpy(cert_info.aik_cert_filename, DEFAULT_AIK_CERT_PEM_FILENAME);
+-    strcpy(cert_info.root_cert_url, DEFAULT_ROOT_CERT_URL);
+-    strcpy(cert_info.sub_cert_url, DEFAULT_SUB_CERT_URL);
++	strcpy(cert_info.root_cert_filename, DEFAULT_ROOT_CERT_PEM_FILENAME);
++	strcpy(cert_info.sub_cert_filename, DEFAULT_SUB_CERT_PEM_FILENAME);
++	strcpy(cert_info.aik_cert_filename, DEFAULT_AIK_CERT_PEM_FILENAME);
++	strcpy(cert_info.root_cert_url, DEFAULT_ROOT_CERT_URL);
++	strcpy(cert_info.sub_cert_url, DEFAULT_SUB_CERT_URL);
+ 
+ 	ret = verify_cca_token_signatures(&cert_info,
+-                                token.cvm_cose,
+-                                token.cvm_token.pub_key);
++								token.cvm_cose,
++								token.cvm_token.pub_key);
+ 	if (!ret) {
+-        return false;
+-    }
++		RTLS_ERR("Token signature verification failed");
++		return false;
++	}
++	RTLS_DEBUG("Token signatures verified successfully");
+ 
+-	if (token.cvm_token.rim.len != rim_ref_size || 
+-		memcmp(rim_ref, token.cvm_token.rim.ptr, token.cvm_token.rim.len)) {
+-        printf("Verifying if RIM of cVM token matches reference value: Failed \n");
++	/* Step 2: Verify RIM */
++	if (token.cvm_token.rim.len != g_rim_ref_size || 
++		memcmp(g_rim_ref, token.cvm_token.rim.ptr, token.cvm_token.rim.len)) {
++		RTLS_ERR("RIM verification failed");
++		printf("Verifying if RIM of cVM token matches reference value: Failed\n");
+ 		return false;
+-    }
++	}
++	RTLS_INFO("RIM verification passed\n");
++
++	/* Step 3: Verify firmware if enabled */
++	if (client_config && client_config->use_firmware) {
++		RTLS_DEBUG("Starting firmware verification");
++		/* Initialize event log processor */
++		vcca_event_log_t event_log;
++		if (!vcca_event_log_init(&event_log, 0, 0)) {
++			RTLS_ERR("Error: Failed to initialize event log\n");
++			return false;
++		}
++		RTLS_DEBUG("Event log initialized");
++
++		/* Replay event log to calculate REM values */
++		if (!vcca_event_log_replay(&event_log)) {
++			RTLS_ERR("Error: Failed to replay event log\n");
++			return false;
++		}
++		RTLS_DEBUG("Event log replayed successfully");
+ 
++		/* Verify REM values from token */
++		RTLS_INFO("Verifying REM values from token...\n");
++		bool all_rems_passed = true;
++		for (int i = 0; i < REM_COUNT; i++) {
++			RTLS_DEBUG("Verifying REM[%d]", i);
++			if (token.cvm_token.rem[i].len != sizeof(rem_t)) {
++				RTLS_ERR("Error: Invalid REM[%d] size in token\n", i);
++				return false;
++			}
++			verify_single_rem(i, (rem_t*)token.cvm_token.rem[i].ptr, &event_log.rems[i]);
++			if (!rem_compare((rem_t*)token.cvm_token.rem[i].ptr, &event_log.rems[i])) {
++				all_rems_passed = false;
++			}
++		}
++
++		if (!all_rems_passed) {
++			RTLS_ERR("REM verification failed\n");
++			return false;
++		}
++
++		RTLS_INFO("All REM values verified successfully\n");
++
++		/* If JSON file is provided, verify firmware state */
++		if (client_config->ref_json_file) {
++			RTLS_INFO("Verifying firmware state...\n");
++			vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
++			if (!state) {
++				RTLS_ERR("Error: Failed to create firmware state\n");
++				return false;
++			}
++			RTLS_DEBUG("Firmware state created");
++
++			if (!vcca_firmware_log_state_extract(&event_log, state)) {
++				RTLS_ERR("Error: Failed to extract firmware state\n");
++				vcca_firmware_log_state_free(state);
++				return false;
++			}
++			RTLS_DEBUG("Firmware state extracted");
++
++			if (!verify_firmware_state_local(client_config->ref_json_file, state)) {
++				RTLS_ERR("Error: Firmware state verification failed\n");
++				vcca_firmware_log_state_free(state);
++				return false;
++			}
++			RTLS_DEBUG("Firmware state verified successfully");
++
++			vcca_firmware_log_state_free(state);
++			RTLS_INFO("Firmware state verification passed\n");
++		}
++	}
++
++	RTLS_DEBUG("All verifications completed successfully");
+ 	return true;
+ }
+ 
+-static int verify_ima_log(rats_tls_handle handle)
++static int verify_ima_log(rats_tls_handle handle, client_args *args)
+ {
+ 	size_t len = sizeof(size_t);
+ 	size_t ima_log_size = 0;
+@@ -96,8 +248,8 @@ static int verify_ima_log(rats_tls_handle handle)
+ 		RTLS_INFO("Failed to receive IMA log size %#x\n", ret);
+ 		return RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
+ 	}
+-	if (ima_log_size == 0) {
+-		RTLS_INFO("IMA log size is zero.\n");
++	if (ima_log_size == 0 || ima_log_size > MAX_IMA_LOG_SIZE) {
++		RTLS_INFO("IMA log size is invalid, %u\n", ima_log_size);
+ 		return RATS_TLS_ERR_LOAD_ENCLAVE_ATTESTERS;
+ 	}
+ 
+@@ -137,7 +289,7 @@ free:
+ 
+ 	rtls_core_context_t *ctx = (rtls_core_context_t *)handle;
+ 	ret = ima_measure(ctx->verifier->config.virtcca.ima_log_hash, \
+-		ctx->verifier->config.virtcca.ima_log_hash_len, digest_list_file, 1, 1);
++		ctx->verifier->config.virtcca.ima_log_hash_len, args->digest_file, 1, 1);
+ 	if (ret) {
+ 		RTLS_INFO("Filed to verify IMA measurement.\n");
+ 		ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
+@@ -145,12 +297,12 @@ free:
+ 	return ret;
+ }
+ 
+-static int deal_ima(rats_tls_handle handle)
++static int deal_ima(rats_tls_handle handle, client_args *args)
+ {
+ 	int ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
+ 
+-	RTLS_DEBUG("IMA file hash patch len %d\n", digest_list_file_size);
+-	if (digest_list_file_size == 0) {
++	RTLS_DEBUG("IMA file hash path %s\n", args->digest_file);
++	if (args->digest_file == NULL || strlen(args->digest_file) == 0) {
+ 		RTLS_INFO("No need to request and verify IMA log.\n");
+ 		return RATS_TLS_ERR_BASE;
+ 	}
+@@ -162,32 +314,128 @@ static int deal_ima(rats_tls_handle handle)
+ 		return RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
+ 	}
+ 
+-	ret = verify_ima_log(handle);
++	ret = verify_ima_log(handle, args);
++	return ret;
++}
++
++static int tc_attr_set_echo(bool enbale) {
++	struct termios tty;
++	if (tcgetattr(STDIN_FILENO, &tty) < 0) {
++		RTLS_ERR("tcgetattr failed, err: %s\n", strerror(errno));
++		return ENCLAVE_VERIFIER_ERR_UNKNOWN;
++	}
++
++	if (enbale) {
++		tty.c_lflag |= ECHO;
++	} else {
++    	tty.c_lflag &= ~ECHO;
++	}
++
++    if (tcsetattr(STDIN_FILENO, TCSANOW, &tty) < 0) {
++        RTLS_ERR("tcsetattr failed, err: %s\n", strerror(errno));
++        return ENCLAVE_VERIFIER_ERR_UNKNOWN;
++    }
++
++	return RATS_TLS_ERR_BASE;
++}
++
++static int deal_passwd(char password[MAX_PASSWD_LEN])
++{
++	int i = 0;
++    char ch;
++
++	RTLS_INFO("Enter remote disk image password: ");
++    if (tc_attr_set_echo(false)) {
++		return ENCLAVE_VERIFIER_ERR_UNKNOWN;
++	}
++    while ((ch = getchar()) != '\n' && ch != EOF) {
++		if (i > MAX_PASSWD_LEN - 1) {
++			RTLS_ERR("Input passwd too long,\n");
++        	return ENCLAVE_VERIFIER_ERR_UNKNOWN;
++		}
++        password[i++] = ch;
++    }
++	putchar('\n');
++	if (tc_attr_set_echo(true)) {
++		return ENCLAVE_VERIFIER_ERR_UNKNOWN;
++	}
++
++	return RATS_TLS_ERR_BASE;
++}
++
++static int deal_fde_key(rats_tls_handle handle, bool use_fde, const char* rootfs_key_file)
++{
++	int ret = ENCLAVE_VERIFIER_ERR_UNKNOWN;
++
++	RTLS_DEBUG("deal FDE key %d\n", use_fde);
++	if (use_fde == false) {
++		RTLS_INFO("FDE is not enabled\n");
++		return RATS_TLS_ERR_BASE;
++	}
++
++	char *msg = ENABLE_FDE_TOKEN;
++	size_t len = strlen(msg);
++	ret = rats_tls_transmit(handle, (void *)msg, &len);
++	if (ret != RATS_TLS_ERR_NONE || len != strlen(msg)) {
++		RTLS_ERR("Failed to send fde token %#x\n", ret);
++		return RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++	}
++
++	size_t key_file_len;
++    uint8_t* key_file = read_file_data(rootfs_key_file, &key_file_len);
++    if (!key_file) {
++        RTLS_ERR("Failed to read rootfs key file\n");
++        return ret;
++    }
++    ret = rats_tls_transmit(handle, key_file, &key_file_len);
++    if (ret != RATS_TLS_ERR_NONE) {
++        RTLS_ERR("Failed to send rootfs key file %#x\n", ret);
++        ret = RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++        goto free;
++    }
++
++    RTLS_INFO("Successfully sent rootfs key file (%zu bytes)\n", key_file_len);
++
++free:
++	free(key_file);
+ 	return ret;
+ }
+ 
+-int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
+-			    char *verifier_type, char *tls_type, char *crypto_type, bool mutual,
+-			    bool provide_endorsements, char *ip, int port)
++int rats_tls_client_startup(client_args *args)
+ {
++	int ret;
+ 	rats_tls_conf_t conf;
++	rats_tls_handle handle = NULL;
++	
++	/* Create static configuration storage */
++	static client_args static_args;
++	static claim_t static_claim;
++	
++	/* Copy parameters to static storage */
++	memcpy(&static_args, args, sizeof(client_args));
+ 
+ 	memset(&conf, 0, sizeof(conf));
+-	conf.log_level = log_level;
+-	strcpy(conf.attester_type, attester_type);
+-	strcpy(conf.verifier_type, verifier_type);
+-	strcpy(conf.tls_type, tls_type);
+-	strcpy(conf.crypto_type, crypto_type);
++	conf.log_level = args->log_level;
++	strcpy(conf.attester_type, args->attester_type);
++	strcpy(conf.verifier_type, args->verifier_type);
++	strcpy(conf.tls_type, args->tls_type);
++	strcpy(conf.crypto_type, args->crypto_type);
+ 	conf.cert_algo = RATS_TLS_CERT_ALGO_DEFAULT;
+-	if (mutual)
++	if (args->mutual)
+ 		conf.flags |= RATS_TLS_CONF_FLAGS_MUTUAL;
+-	if (provide_endorsements)
++	if (args->provide_endorsements)
+ 		conf.flags |= RATS_TLS_CONF_FLAGS_PROVIDE_ENDORSEMENTS;
+ 
+-	/* Create a socket that uses an internet IPv4 address,
+-	 * Sets the socket to be stream based (TCP),
+-	 * 0 means choose the default protocol.
+-	 */
++	/* Set static claim, using type casting to avoid warnings */
++	static_claim.name = "client_args";
++	static_claim.value = (uint8_t *)&static_args;
++	static_claim.value_size = sizeof(client_args);
++	conf.custom_claims = &static_claim;
++	conf.custom_claims_length = 1; /* Set length to 1, indicating only one claim */
++
++	RTLS_INFO("Setting up custom claims with args=%p", &static_args);
++
++	/* Create socket and connect */
+ 	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
+ 	if (sockfd < 0) {
+ 		RTLS_ERR("failed to call socket()\n");
+@@ -197,31 +445,38 @@ int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 	struct sockaddr_in s_addr;
+ 	memset(&s_addr, 0, sizeof(s_addr));
+ 	s_addr.sin_family = AF_INET;
+-	s_addr.sin_port = htons(port);
++	s_addr.sin_port = htons(args->port);
+ 
+-	/* Get the server IPv4 address from the command line call */
+-	if (inet_pton(AF_INET, ip, &s_addr.sin_addr) != 1) {
++	if (inet_pton(AF_INET, args->srv_ip, &s_addr.sin_addr) != 1) {
+ 		RTLS_ERR("invalid server address\n");
+-		return -1;
++		ret = -1;
++		goto err;
+ 	}
+ 
+-	/* Connect to the server */
+-	if (connect(sockfd, (struct sockaddr *)&s_addr, sizeof(s_addr)) == -1) {
++	if ((ret = connect(sockfd, (struct sockaddr *)&s_addr, sizeof(s_addr))) == -1) {
+ 		RTLS_ERR("failed to call connect()\n");
+-		return -1;
++		goto err;
+ 	}
+ 
+-	rats_tls_handle handle;
+-	rats_tls_err_t ret = rats_tls_init(&conf, &handle);
++	ret = rats_tls_init(&conf, &handle);
+ 	if (ret != RATS_TLS_ERR_NONE) {
+ 		RTLS_ERR("Failed to initialize rats tls %#x\n", ret);
+-		return -1;
++		goto err;
+ 	}
+ 
++	/* Ensure configuration is correctly copied to handle */
++	rtls_core_context_t *ctx = (rtls_core_context_t *)handle;
++	if (!ctx->config.custom_claims) {
++		RTLS_ERR("Failed to set custom claims in handle\n");
++		ret = RATS_TLS_ERR_INVALID;
++		goto err;
++	}
++	RTLS_DEBUG("Custom claims set in handle: %p", ctx->config.custom_claims->value);
++
+ 	ret = rats_tls_set_verification_callback(&handle, user_callback);
+ 	if (ret != RATS_TLS_ERR_NONE) {
+ 		RTLS_ERR("Failed to set verification callback %#x\n", ret);
+-		return -1;
++		goto err;
+ 	}
+ 
+ 	ret = rats_tls_negotiate(handle, sockfd);
+@@ -230,13 +485,79 @@ int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 		goto err;
+ 	}
+ 
+-	if ((ret = deal_ima(handle)) != RATS_TLS_ERR_NONE) {
++	/* Handle IMA verification */
++	if ((ret = deal_ima(handle, &static_args)) != RATS_TLS_ERR_NONE) {
+ 		RTLS_ERR("Verify IMA measurement failed %#x\n", ret);
+ 		goto err;
+ 	}
+ 
+-	const char *msg = TOKEN;
++	/* If firmware verification is enabled, first get and verify firmware state */
++	if (static_args.use_firmware || static_args.dump_eventlog) {
++		RTLS_INFO("Starting firmware verification process\n");
++		
++		/* Request and receive CCEL table and event log */
++		ret = request_and_save_firmware_data(handle);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to get firmware data %#x\n", ret);
++			goto err;
++		}
++
++		/* If in dump_eventlog mode, directly execute handle_eventlogs_command and return */
++		if (static_args.dump_eventlog) {
++			ret = handle_eventlogs_command();
++			goto err;
++		}
++
++		/* Below is the firmware verification logic */
++		/* Initialize event log processor */
++		vcca_event_log_t event_log;
++		if (!vcca_event_log_init(&event_log, 0, 0)) {
++			RTLS_ERR("Failed to initialize event log\n");
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++
++		/* Replay event log to calculate REM values */
++		if (!vcca_event_log_replay(&event_log)) {
++			RTLS_ERR("Failed to replay event log\n");
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++
++		/* Create firmware state */
++		vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
++		if (!state) {
++			RTLS_ERR("Failed to create firmware state\n");
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++
++		/* Extract firmware state */
++		if (!vcca_firmware_log_state_extract(&event_log, state)) {
++			RTLS_ERR("Failed to extract firmware state\n");
++			vcca_firmware_log_state_free(state);
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++
++		/* Verify firmware state */
++		if (!verify_firmware_state_local(static_args.ref_json_file, state)) {
++			RTLS_ERR("Firmware state verification failed\n");
++			vcca_firmware_log_state_free(state);
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
+ 
++		vcca_firmware_log_state_free(state);
++		RTLS_INFO("Firmware verification completed successfully\n\n");
++	}
++
++	if ((ret = deal_fde_key(handle, args->use_fde, args->rootfs_key_file)) != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("deal fde key failed %#x\n", ret);
++		goto err;
++	}
++	
++	const char *msg = TOKEN;
+ 	size_t len = strlen(msg);
+ 	ret = rats_tls_transmit(handle, (void *)msg, &len);
+ 	if (ret != RATS_TLS_ERR_NONE || len != strlen(msg)) {
+@@ -256,147 +577,532 @@ int rats_tls_client_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 		len = sizeof(buf) - 1;
+ 	buf[len] = '\0';
+ 
+-	/* Server not running in SGX Enlcave will only send hello message to client */
+ 	printf("Sent to Server: %s\n", msg);
+ 	printf("Received from Server: %s\n", buf);
+ 
++err:
++	if (handle) {
++		/* Clear custom_claims before cleanup to prevent freeing static memory */
++		rtls_core_context_t *ctx = (rtls_core_context_t *)handle;
++		if (ctx) {
++			ctx->config.custom_claims = NULL;
++			ctx->config.custom_claims_length = 0;
++		}
++		rats_tls_cleanup(handle);
++	}
+ 	shutdown(sockfd, SHUT_RDWR);
+ 	close(sockfd);
+-	ret = rats_tls_cleanup(handle);
+-	if (ret != RATS_TLS_ERR_NONE)
+-		RTLS_ERR("Failed to cleanup %#x\n", ret);
+-
+ 	return ret;
++}
+ 
+-err:
+-	/* Ignore the error code of cleanup in order to return the prepositional error */
+-	shutdown(sockfd, SHUT_RDWR);
+-	close(sockfd);
+-	rats_tls_cleanup(handle);
++/* New function: Request and save firmware data */
++static int request_and_save_firmware_data(rats_tls_handle handle)
++{
++	int ret;
++	
++	/* Request CCEL table */
++	const char *ccel_req = "REQUEST_CCEL_TABLE";
++	size_t len = strlen(ccel_req);
++	ret = rats_tls_transmit(handle, (void *)ccel_req, &len);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to request CCEL table %#x\n", ret);
++		return ret;
++	}
++
++	/* Receive CCEL data */
++	unsigned char ccel_table[MAX] = {0};
++	size_t ccel_table_len = MAX;
++	ret = rats_tls_receive(handle, ccel_table, &ccel_table_len);
++	if (ret != RATS_TLS_ERR_NONE || ccel_table_len == 0) {
++		RTLS_ERR("Failed to receive CCEL table %#x\n", ret);
++		return ret;
++	}
++	RTLS_INFO("Received CCEL table data, size: %zu bytes\n", ccel_table_len);
++
++	/* Save CCEL table */
++	FILE *fp = fopen(CCEL_ACPI_TABLE_PATH, "wb");
++	if (!fp) {
++		RTLS_ERR("Failed to open file %s for writing\n", CCEL_ACPI_TABLE_PATH);
++		return RATS_TLS_ERR_INVALID;
++	}
++	if (fwrite(ccel_table, 1, ccel_table_len, fp) != ccel_table_len) {
++		RTLS_ERR("Failed to write CCEL table to file\n");
++		fclose(fp);
++		return RATS_TLS_ERR_INVALID;
++	}
++	fclose(fp);
++	RTLS_INFO("CCEL table saved to %s\n", CCEL_ACPI_TABLE_PATH);
++
++	/* Request event log */
++	RTLS_INFO("Requesting event log...\n");
++	const char *log_req = "REQUEST_EVENT_LOG";
++	len = strlen(log_req);
++	ret = rats_tls_transmit(handle, (void *)log_req, &len);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to request event log %#x\n", ret);
++		return ret;
++	}
++
++	/* Receive event log size */
++	size_t expected_size = 0;
++	len = sizeof(size_t);
++	ret = rats_tls_receive(handle, &expected_size, &len);
++	if (ret != RATS_TLS_ERR_NONE || expected_size == 0 || expected_size > MAX_LOG) {
++		RTLS_ERR("Failed to receive event log size or invalid size %#x\n", ret);
++		return ret;
++	}
++	RTLS_INFO("Expecting event log size: %zu bytes\n", expected_size);
++
++	/* Allocate receive buffer */
++	unsigned char *event_log = (unsigned char *)malloc(expected_size);
++	if (!event_log) {
++		RTLS_ERR("Failed to allocate memory for event log\n");
++		return RATS_TLS_ERR_NO_MEM;
++	}
++
++	/* Receive event log data */
++	size_t total_received = 0;
++	while (total_received < expected_size) {
++		len = expected_size - total_received;
++		ret = rats_tls_receive(handle, event_log + total_received, &len);
++		if (ret != RATS_TLS_ERR_NONE) {
++			RTLS_ERR("Failed to receive event log data %#x\n", ret);
++			free(event_log);
++			return ret;
++		}
++		total_received += len;
++	}
++	RTLS_INFO("Received complete event log (%zu bytes)\n", expected_size);
+ 
+-	return -1;
++	/* Save event log */
++	fp = fopen(CCEL_EVENT_LOG_PATH, "wb");
++	if (!fp) {
++		RTLS_ERR("Failed to open file %s for writing\n", CCEL_EVENT_LOG_PATH);
++		free(event_log);
++		return RATS_TLS_ERR_INVALID;
++	}
++	if (fwrite(event_log, 1, expected_size, fp) != expected_size) {
++		RTLS_ERR("Failed to write event log to file\n");
++		fclose(fp);
++		free(event_log);
++		return RATS_TLS_ERR_INVALID;
++	}
++	fclose(fp);
++	free(event_log);
++	RTLS_INFO("Event log saved to %s\n\n", CCEL_EVENT_LOG_PATH);
++
++	return RATS_TLS_ERR_NONE;
++}
++
++/* New function: Verify firmware state */
++static bool verify_firmware_state_local(const char* json_file, const vcca_firmware_log_state_t* state)
++{
++    if (!json_file || !state) {
++        return false;
++    }
++
++    firmware_reference_t ref = {0};
++    bool result = false;
++
++    /* Parse JSON file */
++    if (!parse_json_file(json_file, &ref)) {
++        printf("Error: Failed to parse JSON file\n");
++        return false;
++    }
++
++    printf("\nVerifying firmware components...\n");
++
++    /* Verify EFI state (grub) */
++    if (state->efi && state->efi->image_count > 0) {
++        bool found_match = false;
++        for (uint32_t i = 0; i < state->efi->image_count; i++) {
++            if (compare_and_print_hash("GRUB", ref.grub,
++                state->efi->images[i].image_hash,
++                state->efi->images[i].image_hash_size)) {
++                found_match = true;
++                break;
++            }
++        }
++        if (!found_match) {
++            goto cleanup;
++        }
++    }
++
++    /* Verify GRUB configuration */
++    if (state->grub && state->grub->config_hash) {
++        if (!compare_and_print_hash("GRUB config", ref.grub_cfg,
++            state->grub->config_hash,
++            state->grub->config_hash_size)) {
++            goto cleanup;
++        }
++    }
++
++    /* Verify kernel and initramfs */
++    if (state->linux_kernel) {
++        if (state->linux_kernel->kernel_hash) {
++            if (!compare_and_print_hash("Kernel", ref.kernel,
++                state->linux_kernel->kernel_hash,
++                state->linux_kernel->kernel_hash_size)) {
++                goto cleanup;
++            }
++        }
++        if (state->linux_kernel->initrd_hash) {
++            if (!compare_and_print_hash("Initramfs", ref.initramfs,
++                state->linux_kernel->initrd_hash,
++                state->linux_kernel->initrd_hash_size)) {
++                goto cleanup;
++            }
++        }
++    }
++
++    printf("\nAll firmware components verification passed\n\n");
++    result = true;
++
++cleanup:
++    free_firmware_reference(&ref);
++    return result;
++}
++
++static void print_hex_dump_with_ascii(const uint8_t* data, size_t length)
++{
++    char ascii_buf[17] = {0};
++
++    printf("=> Read CCEL ACPI Table\n");
++    for (size_t i = 0; i < length; i++) {
++        if (i % 16 == 0) {
++            if (i > 0) {
++                printf("  %s\n", ascii_buf);
++            }
++            printf("%08zX  ", i);
++            memset(ascii_buf, 0, sizeof(ascii_buf));
++        }
++        printf("%02X ", data[i]);
++        ascii_buf[i % 16] = isprint(data[i]) ? data[i] : '.';
++    }
++
++    /* Process the last line */
++    if (length % 16 != 0) {
++        for (size_t i = length % 16; i < 16; i++) {
++            printf("   ");
++        }
++    }
++    printf("  %s\n", ascii_buf);
++}
++
++static void print_acpi_table(const uint8_t* ccel_data, size_t file_size, const acpi_table_info_t* info)
++{
++    print_hex_dump_with_ascii(ccel_data, file_size);
++
++    printf("Revision:     %d\n", info->revision);
++    printf("Length:       %zu\n", file_size);
++    printf("Checksum:     %02X\n", info->checksum);
++    
++    printf("OEM ID:       b'");
++    for (int i = 0; i < 6; i++) {
++        printf("%c", info->oem_id[i]);
++    }
++    printf("'\n");
++
++    printf("CC Type:      %d\n", info->cc_type);
++    printf("CC Sub-type:  %d\n", info->cc_subtype);
++    
++    printf("Log Lenght:   0x%08lX\n", (unsigned long)info->log_length);
++    printf("Log Address:  0x%08lX\n", (unsigned long)info->log_address);
++    printf("\n");
++}
++
++static bool parse_acpi_table(const uint8_t* ccel_data, size_t file_size, acpi_table_info_t* info)
++{
++    if (!ccel_data || !info || file_size < 56) {
++        return false;
++    }
++
++    if (memcmp(ccel_data, "CCEL", 4) != 0) {
++        printf("Error: Invalid CCEL signature\n");
++        return false;
++    }
++
++    info->revision = ccel_data[8];
++    info->checksum = ccel_data[9];
++    memcpy(info->oem_id, ccel_data + 10, 6);
++    info->cc_type = ccel_data[36];
++    info->cc_subtype = ccel_data[37];
++    info->log_length = *(uint64_t*)(ccel_data + 40);
++    info->log_address = *(uint64_t*)(ccel_data + 48);
++
++    print_acpi_table(ccel_data, file_size, info);
++
++    return true;
++}
++
++static int handle_eventlogs_command(void)
++{
++    size_t file_size;
++    uint8_t* ccel_data = read_file_data(CCEL_ACPI_TABLE_PATH, &file_size);
++    if (!ccel_data) {
++        return 1;
++    }
++
++    acpi_table_info_t table_info;
++    if (!parse_acpi_table(ccel_data, file_size, &table_info)) {
++        free(ccel_data);
++        return 1;
++    }
++
++    vcca_event_log_t event_log;
++    if (!vcca_event_log_init(&event_log, (size_t)table_info.log_address, (size_t)table_info.log_length)) {
++        printf("Error: Failed to initialize event log\n");
++        free(ccel_data);
++        return 1;
++    }
++
++    vcca_event_log_dump(&event_log);
++
++    free(ccel_data);
++    return 0;
+ }
+ 
+ int main(int argc, char **argv)
+ {
+-	char *const short_options = "a:v:t:c:mel:i:p:r:d:h";
+-	// clang-format off
+-	struct option long_options[] = {
+-		{ "attester", required_argument, NULL, 'a' },
+-		{ "verifier", required_argument, NULL, 'v' },
+-		{ "tls", required_argument, NULL, 't' },
+-		{ "crypto", required_argument, NULL, 'c' },
+-		{ "mutual", no_argument, NULL, 'm' },
+-		{ "endorsements", no_argument, NULL, 'e' },
+-		{ "log-level", required_argument, NULL, 'l' },
+-		{ "ip", required_argument, NULL, 'i' },
+-		{ "port", required_argument, NULL, 'p' },
+-		{ "rim", required_argument, NULL, 'r' },
+-		{ "digest", required_argument, NULL, 'd' },
+-		{ "help", no_argument, NULL, 'h' },
+-		{ 0, 0, 0, 0 }
+-	};
+-	// clang-format on
+-
+-	char *attester_type = "";
+-	char *verifier_type = "";
+-	char *tls_type = "";
+-	char *crypto_type = "";
+-	bool mutual = false;
+-	bool provide_endorsements = false;
+-	rats_tls_log_level_t log_level = RATS_TLS_LOG_LEVEL_INFO;
+-	char *srv_ip = DEFAULT_IP;
+-	int port = DEFAULT_PORT;
+-	char *rim = "";
+-	char *digest_file = "";
+-	int opt;
+-
+-	do {
+-		opt = getopt_long(argc, argv, short_options, long_options, NULL);
+-		switch (opt) {
+-		case 'a':
+-			attester_type = optarg;
+-			break;
+-		case 'v':
+-			verifier_type = optarg;
+-			break;
+-		case 't':
+-			tls_type = optarg;
+-			break;
+-		case 'c':
+-			crypto_type = optarg;
+-			break;
+-		case 'm':
+-			mutual = true;
+-			break;
+-		case 'e':
+-			provide_endorsements = true;
+-			break;
+-		case 'l':
+-			if (!strcasecmp(optarg, "debug"))
+-				log_level = RATS_TLS_LOG_LEVEL_DEBUG;
+-			else if (!strcasecmp(optarg, "info"))
+-				log_level = RATS_TLS_LOG_LEVEL_INFO;
+-			else if (!strcasecmp(optarg, "warn"))
+-				log_level = RATS_TLS_LOG_LEVEL_WARN;
+-			else if (!strcasecmp(optarg, "error"))
+-				log_level = RATS_TLS_LOG_LEVEL_ERROR;
+-			else if (!strcasecmp(optarg, "fatal"))
+-				log_level = RATS_TLS_LOG_LEVEL_FATAL;
+-			else if (!strcasecmp(optarg, "off"))
+-				log_level = RATS_TLS_LOG_LEVEL_NONE;
+-			break;
+-		case 'i':
+-			srv_ip = optarg;
+-			break;
+-		case 'p':
+-			port = atoi(optarg);
+-			break;
+-		case 'r':
+-			rim = optarg;
+-			if (hex_to_bytes(rim, strlen(rim), rim_ref, &rim_ref_size) != 0) {
+-				exit(1);
+-			}
+-			break;
+-		case 'd':
+-			digest_file = optarg;
+-			digest_list_file_size = strlen(digest_file);
+-			if (digest_list_file_size > PATH_MAX) {
+-				printf("Digest list file too long.\n");
+-				exit(1);
+-			}
+-			if (access(digest_file, F_OK) != 0) {
+-				printf("Digest list file cannot be accessed.\n");
+-				exit(1);
+-			}
+-			memcpy(digest_list_file, digest_file, digest_list_file_size);
+-			break;
+-		case -1:
+-			break;
+-		case 'h':
+-			puts("    Usage:\n\n"
+-			     "        rats-tls-client <options> [arguments]\n\n"
+-			     "    Options:\n\n"
+-			     "        --attester/-a value   set the type of quote attester\n"
+-			     "        --verifier/-v value   set the type of quote verifier\n"
+-			     "        --tls/-t value        set the type of tls wrapper\n"
+-			     "        --crypto/-c value     set the type of crypto wrapper\n"
+-			     "        --mutual/-m           set to enable mutual attestation\n"
+-			     "        --endorsements/-e     set to let attester provide endorsements\n"
+-			     "        --log-level/-l        set the log level\n"
+-			     "        --ip/-i               set the listening ip address\n"
+-			     "        --port/-p             set the listening tcp port\n"
+-			     "        --rim/-r              set the initial measurement of cVM\n"
+-			     "        --digest/-d           set the digest list file for verifying IMA measurement\n"
+-			     "        --help/-h             show the usage\n");
+-			exit(1);
+-		default:
+-			exit(1);
+-		}
+-	} while (opt != -1);
++	client_args args = {0};
++	if (parse_input_args(argc, argv, &args)) {
++		return -1;
++	}
++	global_log_level = args.log_level;
++
++	return rats_tls_client_startup(&args);
++}
++
++/* Helper function declarations */
++static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
++static char* extract_json_string(const char* json, const char* key);
++static bool parse_json_file(const char* filename, firmware_reference_t* ref);
++static void free_firmware_reference(firmware_reference_t* ref);
++static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
++                                 const uint8_t* actual_hash, size_t hash_size);
++static int parse_input_args(int argc, char **argv, client_args *args);
++
++/* Implementation of helper functions */
++static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
++{
++    for (size_t i = 0; i < len; i++) {
++        sprintf(hex_str + (i * 2), "%02x", bytes[i]);
++    }
++}
++
++static char* extract_json_string(const char* json, const char* key)
++{
++    char* value = NULL;
++    char search_key[64];
++    snprintf(search_key, sizeof(search_key), "\"%s\":", key);
++    
++    char* pos = strstr(json, search_key);
++    if (pos) {
++        pos = strchr(pos + strlen(search_key), '"');
++        if (pos) {
++            pos++; /* Skip quote */
++            char* end = strchr(pos, '"');
++            if (end) {
++                size_t len = end - pos;
++                value = (char*)malloc(len + 1);
++                if (value) {
++                    strncpy(value, pos, len);
++                    value[len] = '\0';
++                }
++            }
++        }
++    }
++    return value;
++}
++
++static bool parse_json_file(const char* filename, firmware_reference_t* ref)
++{
++    if (!filename || !ref) {
++        return false;
++    }
++
++    size_t file_size;
++    char* json_content = read_text_file(filename, &file_size);
++    if (!json_content) {
++        return false;
++    }
++
++    ref->grub = extract_json_string(json_content, "grub");
++    ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
++    ref->kernel = extract_json_string(json_content, "kernel");
++    ref->initramfs = extract_json_string(json_content, "initramfs");
++    ref->hash_alg = extract_json_string(json_content, "hash_alg");
++
++    free(json_content);
++    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
++}
++
++static void free_firmware_reference(firmware_reference_t* ref)
++{
++    if (!ref) {
++        return;
++    }
++    free(ref->grub);
++    free(ref->grub_cfg);
++    free(ref->kernel);
++    free(ref->initramfs);
++    free(ref->hash_alg);
++}
++
++static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
++                                 const uint8_t* actual_hash, size_t hash_size)
++{
++    if (!ref_hash || !actual_hash) {
++        return false;
++    }
++    
++    char actual_hex[HASH_STR_LENGTH + 1] = {0};
++    bytes_to_hex_string(actual_hash, hash_size, actual_hex);
++    
++    bool match = (strncmp(ref_hash, actual_hex, HASH_STR_LENGTH) == 0);
++    printf("\n%s verification %s\n", component_name, match ? "passed" : "failed");
++    printf("Expected: %s\n", ref_hash);
++    printf("Got:      %s\n", actual_hex);
++    return match;
++}
++
++static int parse_input_args(int argc, char **argv, client_args *args)
++{
++    int opt;
++    char *rim = NULL;
++    char *const short_options = "a:v:t:c:mel:i:p:r:d:gf:k:h";
++    struct option long_options[] = {
++        { "attester", required_argument, NULL, 'a' },
++        { "verifier", required_argument, NULL, 'v' },
++        { "tls", required_argument, NULL, 't' },
++        { "crypto", required_argument, NULL, 'c' },
++        { "mutual", no_argument, NULL, 'm' },
++        { "endorsements", no_argument, NULL, 'e' },
++        { "log-level", required_argument, NULL, 'l' },
++        { "ip", required_argument, NULL, 'i' },
++        { "port", required_argument, NULL, 'p' },
++        { "rim", required_argument, NULL, 'r' },
++        { "digest", required_argument, NULL, 'd' },
++        { "firmware", required_argument, NULL, 'f' },
++        { "eventlog", no_argument, NULL, 'g' },
++        { "fdekey", required_argument, NULL, 'k' },
++        { "help", no_argument, NULL, 'h' },
++        { 0, 0, 0, 0 }
++    };
+ 
+-	global_log_level = log_level;
++    args->attester_type = "";
++    args->verifier_type = "";
++    args->tls_type = "";
++    args->crypto_type = "";
++    args->mutual = false;
++    args->provide_endorsements = false;
++    args->log_level = RATS_TLS_LOG_LEVEL_INFO;
++    args->srv_ip = DEFAULT_IP;
++    args->port = DEFAULT_PORT;
++    args->digest_file = "";
++    args->use_firmware = false;
++    args->dump_eventlog = false;
++    args->ref_json_file = NULL;
++    args->use_fde = false;
++    args->rootfs_key_file = NULL;
+ 
+-	return rats_tls_client_startup(log_level, attester_type, verifier_type, tls_type,
+-				       crypto_type, mutual, provide_endorsements, srv_ip, port);
++    do {
++        opt = getopt_long(argc, argv, short_options, long_options, NULL);
++        switch (opt) {
++        case 'a':
++            CHECK_LENGHT_ASSIGN(optarg, ENCLAVE_ATTESTER_TYPE_NAME_SIZE, args->attester_type);
++            break;
++        case 'v':
++            CHECK_LENGHT_ASSIGN(optarg, ENCLAVE_VERIFIER_TYPE_NAME_SIZE, args->verifier_type);
++            break;
++        case 't':
++            CHECK_LENGHT_ASSIGN(optarg, TLS_TYPE_NAME_SIZE, args->tls_type);
++            break;
++        case 'c':
++            CHECK_LENGHT_ASSIGN(optarg, CRYPTO_TYPE_NAME_SIZE, args->crypto_type);
++            break;
++        case 'm':
++            args->mutual = true;
++            break;
++        case 'e':
++            args->provide_endorsements = true;
++            break;
++        case 'l':
++            if (!strcasecmp(optarg, "debug"))
++                args->log_level = RATS_TLS_LOG_LEVEL_DEBUG;
++            else if (!strcasecmp(optarg, "info"))
++                args->log_level = RATS_TLS_LOG_LEVEL_INFO;
++            else if (!strcasecmp(optarg, "warn"))
++                args->log_level = RATS_TLS_LOG_LEVEL_WARN;
++            else if (!strcasecmp(optarg, "error"))
++                args->log_level = RATS_TLS_LOG_LEVEL_ERROR;
++            else if (!strcasecmp(optarg, "fatal"))
++                args->log_level = RATS_TLS_LOG_LEVEL_FATAL;
++            else if (!strcasecmp(optarg, "off"))
++                args->log_level = RATS_TLS_LOG_LEVEL_NONE;
++            break;
++        case 'i':
++            args->srv_ip = optarg;
++            break;
++        case 'p':
++            args->port = atoi(optarg);
++            break;
++        case 'r':
++            CHECK_LENGHT_ASSIGN(optarg, MAX_MEASUREMENT_SIZE + 1, rim);
++            if (hex_to_bytes((unsigned char*)rim, strlen(rim), g_rim_ref, &g_rim_ref_size) != 0) {
++                printf("change rim to bytes failed\n");
++                return -1;
++            }
++            break;
++        case 'd':
++            CHECK_LENGHT_ASSIGN(optarg, PATH_MAX, args->digest_file);
++            if (access(args->digest_file, F_OK) != 0) {
++                printf("Digest list file cannot be accessed.\n");
++                return -1;
++            }
++            break;
++        case 'f':
++            if (args->dump_eventlog) {
++                printf("Error: Cannot use -f and -g together\n");
++                return -1;
++            }
++            args->use_firmware = true;
++            args->ref_json_file = optarg;
++            break;
++        case 'g':
++            if (args->use_firmware) {
++                printf("Error: Cannot use -g and -f together\n");
++                return -1;
++            }
++            args->dump_eventlog = true;
++            break;
++        case 'k':
++            args->use_fde = true;
++            args->rootfs_key_file = optarg;
++            break;
++        case -1:
++            break;
++        default:
++            puts("    Usage:\n\n"
++                 "        rats-tls-client <options> [arguments]\n\n"
++                 "    Options:\n\n"
++                 "        --attester/-a value   set the type of quote attester\n"
++                 "        --verifier/-v value   set the type of quote verifier\n"
++                 "        --tls/-t value        set the type of tls wrapper\n"
++                 "        --crypto/-c value     set the type of crypto wrapper\n"
++                 "        --mutual/-m           set to enable mutual attestation\n"
++                 "        --endorsements/-e     set to let attester provide endorsements\n"
++                 "        --log-level/-l        set the log level\n"
++                 "        --ip/-i               set the listening ip address\n"
++                 "        --port/-p             set the listening tcp port\n"
++                 "        --rim/-r              set the initial measurement of cVM\n"
++                 "        --digest/-d           set the digest list file for verifying IMA measurement\n"
++                 "        --firmware/-f         enable firmware verification with JSON reference file\n"
++                 "        --eventlog/-g         dump VCCA event logs\n"
++                 "        --fdekey/-k           enable Full Disk Encryption with rootfs key file\n"
++                 "        --help/-h             show the usage\n");
++            return -1;
++        }
++    } while (opt != -1);
++    return 0;
+ }
+diff --git a/samples/virtcca-client/rem.c b/samples/virtcca-client/rem.c
+new file mode 100644
+index 0000000..5e2becc
+--- /dev/null
++++ b/samples/virtcca-client/rem.c
+@@ -0,0 +1,29 @@
++#include <stdio.h>
++#include <string.h>
++#include "rem.h"
++
++bool rem_init(rem_t* rem)
++{
++    if (!rem) return false;
++    memset(rem->data, 0, REM_LENGTH_BYTES);
++    return true;
++}
++
++bool rem_compare(const rem_t* rem1, const rem_t* rem2)
++{
++    if (!rem1 || !rem2) return false;
++    return memcmp(rem1->data, rem2->data, REM_LENGTH_BYTES) == 0;
++}
++
++void rem_dump(const rem_t* rem)
++{
++    if (!rem) {
++        return;
++    }
++    
++    printf("REM Value: ");
++    for (int i = 0; i < REM_LENGTH_BYTES; i++) {
++        printf("%02x", rem->data[i]);
++    }
++    printf("\n");
++}
+\ No newline at end of file
+diff --git a/samples/virtcca-client/utils/inc/utils.h b/samples/virtcca-client/utils/inc/utils.h
+index 62d4e3b..95d3ebc 100644
+--- a/samples/virtcca-client/utils/inc/utils.h
++++ b/samples/virtcca-client/utils/inc/utils.h
+@@ -3,9 +3,15 @@
+ 
+ #include <stdint.h>
+ #include <stddef.h>
++#include <stdbool.h>
+ 
+ int hex_to_bytes(unsigned char *in, size_t in_len, unsigned char *out, size_t *out_len);
+ int download_cert_pem(const char *prefix, const char *filename, const char *url);
+ int file_exists(const char *prefix, const char *filename);
+ 
++/* File handling functions */
++uint8_t* read_file_data(const char* filename, size_t* out_size);
++char* read_text_file(const char* filename, size_t* out_size); 
++bool save_file_data(const char *file_name, const unsigned char *data, size_t size);
++
+ #endif /* UTILS_H */
+diff --git a/samples/virtcca-client/utils/src/utils.c b/samples/virtcca-client/utils/src/utils.c
+index 67e2e2c..a76ca98 100644
+--- a/samples/virtcca-client/utils/src/utils.c
++++ b/samples/virtcca-client/utils/src/utils.c
+@@ -3,6 +3,7 @@
+ #include <string.h>
+ #include <unistd.h>
+ #include <linux/limits.h>
++#include <ctype.h>
+ #include "utils.h"
+ 
+ #define CMDLINE_SIZE 1000
+@@ -58,3 +59,115 @@ int file_exists(const char *prefix, const char *filename)
+     snprintf(fullpath, sizeof(fullpath), "%s/%s", prefix, filename);
+     return access(fullpath, F_OK) == 0;
+ }
++
++/* 
++ * File reading utility function
++ * Reads binary data from a file and returns it as a dynamically allocated buffer
++ */
++uint8_t* read_file_data(const char* filename, size_t* out_size)
++{
++    if (!filename || !out_size) {
++        return NULL;
++    }
++
++    /* Open file */
++    FILE* fp = fopen(filename, "rb");
++    if (!fp) {
++        printf("Error: Could not open file: %s\n", filename);
++        return NULL;
++    }
++
++    /* Get file size */
++    fseek(fp, 0, SEEK_END);
++    size_t file_size = ftell(fp);
++    fseek(fp, 0, SEEK_SET);
++
++    /* Allocate memory */
++    uint8_t* data = (uint8_t*)malloc(file_size);
++    if (!data) {
++        printf("Error: Failed to allocate memory for file data\n");
++        fclose(fp);
++        return NULL;
++    }
++
++    /* Read data */
++    if (fread(data, 1, file_size, fp) != file_size) {
++        printf("Error: Failed to read file data\n");
++        free(data);
++        fclose(fp);
++        return NULL;
++    }
++
++    fclose(fp);
++    *out_size = file_size;
++    return data;
++}
++
++/* 
++ * Text file reading utility function
++ * Reads text data from a file and returns it as a null-terminated string
++ */
++char* read_text_file(const char* filename, size_t* out_size)
++{
++    if (!filename || !out_size) {
++        return NULL;
++    }
++
++    /* Open file */
++    FILE* fp = fopen(filename, "r");
++    if (!fp) {
++        printf("Error: Could not open file: %s\n", filename);
++        return NULL;
++    }
++
++    /* Get file size */
++    fseek(fp, 0, SEEK_END);
++    size_t file_size = ftell(fp);
++    fseek(fp, 0, SEEK_SET);
++
++    /* Allocate memory (add 1 for null terminator) */
++    char* data = (char*)malloc(file_size + 1);
++    if (!data) {
++        printf("Error: Failed to allocate memory for file data\n");
++        fclose(fp);
++        return NULL;
++    }
++
++    /* Read data */
++    if (fread(data, 1, file_size, fp) != file_size) {
++        printf("Error: Failed to read file data\n");
++        free(data);
++        fclose(fp);
++        return NULL;
++    }
++
++    /* Add null terminator */
++    data[file_size] = '\0';
++
++    fclose(fp);
++    *out_size = file_size;
++    return data;
++}
++
++/*
++ * File saving utility function
++ * Saves binary data to a file
++ */
++bool save_file_data(const char *file_name, const unsigned char *data, size_t size)
++{
++    FILE *file = fopen(file_name, "wb");
++    if (file == NULL) {
++        printf("Failed to open file %s for writing.\n", file_name);
++        return false;
++    }
++
++    size_t bytes_written = fwrite(data, 1, size, file);
++    if (bytes_written != size) {
++        printf("Failed to write data to file %s.\n", file_name);
++        fclose(file);
++        return false;
++    }
++
++    fclose(file);
++    return true;
++}
+diff --git a/samples/virtcca-client/vcca_event_log.c b/samples/virtcca-client/vcca_event_log.c
+new file mode 100644
+index 0000000..3881ea4
+--- /dev/null
++++ b/samples/virtcca-client/vcca_event_log.c
+@@ -0,0 +1,524 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <ctype.h>
++#include <openssl/evp.h>
++#include <openssl/sha.h>
++#include "vcca_event_log.h"
++#include "config.h"
++#include "vcca_firmware_state.h"
++/* Event log header magic number */
++#define VCCA_EVENT_LOG_MAGIC 0xFFFFFFFF
++
++
++/* Function declarations */
++static const char* get_event_type_string(uint32_t type);
++static void print_hex_dump(const uint8_t* data, size_t length, size_t base_addr);
++static void update_rem(rem_t* rem, const uint8_t* digest);
++static const char* get_algorithm_string(uint16_t algoid);
++static int get_digest_size(uint16_t algoid);
++
++/* Event log entry structure */
++typedef struct {
++    uint32_t magic;
++    uint32_t type;
++    uint32_t digest_count;
++    uint8_t* digests;
++    uint32_t event_size;
++    uint8_t* event;
++} vcca_event_log_header_t;
++
++bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
++                              vcca_event_log_entry_t* entry)
++{
++    if (!log || !pos || !entry || *pos >= log->blob.length) {
++        return false;
++    }
++
++    /* Initialize entry */
++    memset(entry, 0, sizeof(vcca_event_log_entry_t));
++
++    /* Save initial position */
++    size_t initial_pos = *pos;
++
++    /* Read event header */
++    uint32_t register_index = binary_blob_get_uint32(&log->blob, pos);
++    entry->event_type = binary_blob_get_uint32(&log->blob, pos);
++
++    /* Check if reached end of file */
++    if (register_index == VCCA_EVENT_LOG_MAGIC &&
++        entry->event_type == VCCA_EVENT_LOG_MAGIC) {
++        return false;
++    }
++
++    /* Decrease register_index by 1 to ensure REM index starts from 0 */
++    entry->rem_index = register_index > 0 ? register_index - 1 : 0;
++
++    /* Read digest count */
++    entry->digest_count = binary_blob_get_uint32(&log->blob, pos);
++
++    /* Special handling for EV_NO_ACTION event */
++    if (entry->event_type == EV_NO_ACTION) {
++        /* Skip 20 bytes of digest */
++        *pos += 20;
++        
++        /* Read Spec ID Event03 string (24 bytes) */
++        uint8_t spec_id[24];
++        binary_blob_get_bytes(&log->blob, pos, 24, spec_id);
++        
++        /* Read algorithm count */
++        entry->algorithms_number = binary_blob_get_uint32(&log->blob, pos);
++        
++        /* Read algorithm information */
++        entry->algorithms = (algorithm_info_t*)malloc(entry->algorithms_number * sizeof(algorithm_info_t));
++        if (!entry->algorithms) {
++            return false;
++        }
++        
++        for (uint32_t i = 0; i < entry->algorithms_number; i++) {
++            entry->algorithms[i].algoid = binary_blob_get_uint16(&log->blob, pos);
++            entry->algorithms[i].digestsize = binary_blob_get_uint16(&log->blob, pos);
++        }
++        
++        /* Read vendor information size and skip */
++        uint8_t vendorsize = binary_blob_get_uint8(&log->blob, pos);
++        *pos += vendorsize;
++        
++        /* Set event size */
++        entry->event_size = *pos - initial_pos;
++        if (entry->event_size > 0) {
++            entry->event = (uint8_t*)malloc(entry->event_size);
++            if (entry->event) {
++                memcpy(entry->event, log->blob.data + initial_pos, entry->event_size);
++            }
++        }
++        
++        return true;
++    }
++
++    /* Process other type events */
++    if (entry->digest_count > 0) {
++        entry->digests = (uint8_t*)malloc(entry->digest_count * SHA256_DIGEST_LENGTH);
++        entry->alg_ids = (uint16_t*)malloc(entry->digest_count * sizeof(uint16_t));
++        if (!entry->digests || !entry->alg_ids) {
++            free(entry->digests);
++            free(entry->alg_ids);
++            return false;
++        }
++
++        /* Read each digest */
++        for (uint32_t i = 0; i < entry->digest_count; i++) {
++            /* Read algorithm ID */
++            entry->alg_ids[i] = binary_blob_get_uint16(&log->blob, pos);
++            
++            /* Read digest data */
++            binary_blob_get_bytes(&log->blob, pos, SHA256_DIGEST_LENGTH,
++                                entry->digests + i * SHA256_DIGEST_LENGTH);
++        }
++    }
++
++    /* Read event data size */
++    uint32_t event_data_size = binary_blob_get_uint32(&log->blob, pos);
++    
++    /* Read event data */
++    if (event_data_size > 0) {
++        if (event_data_size > 10240) {
++            free(entry->digests);
++            free(entry->alg_ids);
++            entry->digests = NULL;
++            entry->alg_ids = NULL;
++            return false;
++        }
++    }
++
++    /* Set total event size (including header, digest, and event data) */
++    entry->event_size = *pos - initial_pos + event_data_size;
++
++    /* Allocate and save complete event data */
++    if (entry->event_size > 0) {
++        entry->event = (uint8_t*)malloc(entry->event_size);
++        if (!entry->event) {
++            free(entry->digests);
++            free(entry->alg_ids);
++            entry->digests = NULL;
++            entry->alg_ids = NULL;
++            return false;
++        }
++
++        /* Copy header and digest data */
++        memcpy(entry->event, log->blob.data + initial_pos, *pos - initial_pos);
++
++        /* Copy event data */
++        if (event_data_size > 0) {
++            binary_blob_get_bytes(&log->blob, pos, event_data_size,
++                                entry->event + (*pos - initial_pos));
++        }
++    }
++
++    return true;
++}
++
++static void update_rem(rem_t* rem, const uint8_t* digest)
++{
++    uint8_t hash[SHA256_DIGEST_LENGTH];
++    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
++    if (!ctx) {
++        printf("Error: Failed to create EVP context\n");
++        return;
++    }
++
++    if (EVP_DigestInit_ex(ctx, EVP_sha256(), NULL) != 1) {
++        printf("Error: Failed to initialize SHA256\n");
++        EVP_MD_CTX_free(ctx);
++        return;
++    }
++
++    /* Update REM data */
++    if (EVP_DigestUpdate(ctx, rem->data, REM_LENGTH_BYTES) != 1) {
++        printf("Error: Failed to update REM data\n");
++        EVP_MD_CTX_free(ctx);
++        return;
++    }
++
++    /* Update digest data */
++    if (EVP_DigestUpdate(ctx, digest, SHA256_DIGEST_LENGTH) != 1) {
++        printf("Error: Failed to update digest data\n");
++        EVP_MD_CTX_free(ctx);
++        return;
++    }
++
++    /* Get final hash value */
++    unsigned int hash_len;
++    if (EVP_DigestFinal_ex(ctx, hash, &hash_len) != 1) {
++        printf("Error: Failed to finalize hash\n");
++        EVP_MD_CTX_free(ctx);
++        return;
++    }
++
++    /* Copy hash value to REM */
++    memcpy(rem->data, hash, REM_LENGTH_BYTES);
++
++    EVP_MD_CTX_free(ctx);
++}
++
++bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length)
++{
++    if (!log) {
++        return false;
++    }
++
++    /* Read event log data from file */
++    size_t file_size;
++    uint8_t* data = read_file_data(g_config.event_log_file, &file_size);
++    if (!data) {
++        return false;
++    }
++
++    /* Initialize binary blob */
++    if (!binary_blob_init(&log->blob, data, file_size, base)) {
++        printf("Error: Failed to initialize binary blob\n");
++        free(data);
++        return false;
++    }
++
++    log->log_base = base;
++    log->log_length = file_size;
++
++    /* Initialize all REM values to 0 */
++    for (int i = 0; i < REM_COUNT; i++) {
++        rem_init(&log->rems[i]);
++    }
++
++    return true;
++}
++
++static void print_hex_dump(const uint8_t* data, size_t length, size_t base_addr)
++{
++    char ascii_buf[17] = {0};
++
++    for (size_t i = 0; i < length; i++) {
++        if (i % 16 == 0) {
++            if (i > 0) {
++                printf("  %s\n", ascii_buf);
++            }
++            if (base_addr) {
++                printf("%08zX  ", base_addr + i);
++            } else {
++                printf("%08zX  ", i);
++            }
++            memset(ascii_buf, 0, sizeof(ascii_buf));
++        }
++        printf("%02X ", data[i]);
++        ascii_buf[i % 16] = isprint(data[i]) ? data[i] : '.';
++    }
++
++    /* Process last line */
++    if (length % 16 != 0) {
++        /* Pad with spaces */
++        for (size_t i = length % 16; i < 16; i++) {
++            printf("   ");
++        }
++    }
++    printf("  %s\n", ascii_buf);
++}
++
++/* Move function definitions here */
++static const char* get_event_type_string(uint32_t type)
++{
++    switch (type) {
++        case EV_PREBOOT_CERT: return "EV_PREBOOT_CERT";
++        case EV_POST_CODE: return "EV_POST_CODE";
++        case EV_UNUSED: return "EV_UNUSED";
++        case EV_NO_ACTION: return "EV_NO_ACTION";
++        case EV_SEPARATOR: return "EV_SEPARATOR";
++        case EV_ACTION: return "EV_ACTION";
++        case EV_EVENT_TAG: return "EV_EVENT_TAG";
++        case EV_S_CRTM_CONTENTS: return "EV_S_CRTM_CONTENTS";
++        case EV_S_CRTM_VERSION: return "EV_S_CRTM_VERSION";
++        case EV_CPU_MICROCODE: return "EV_CPU_MICROCODE";
++        case EV_PLATFORM_CONFIG_FLAGS: return "EV_PLATFORM_CONFIG_FLAGS";
++        case EV_TABLE_OF_DEVICES: return "EV_TABLE_OF_DEVICES";
++        case EV_COMPACT_HASH: return "EV_COMPACT_HASH";
++        case EV_IPL: return "EV_IPL";
++        case EV_IPL_PARTITION_DATA: return "EV_IPL_PARTITION_DATA";
++        case EV_NONHOST_CODE: return "EV_NONHOST_CODE";
++        case EV_NONHOST_CONFIG: return "EV_NONHOST_CONFIG";
++        case EV_NONHOST_INFO: return "EV_NONHOST_INFO";
++        case EV_OMIT_BOOT_DEVICE_EVENTS: return "EV_OMIT_BOOT_DEVICE_EVENTS";
++        case EV_EFI_VARIABLE_DRIVER_CONFIG: return "EV_EFI_VARIABLE_DRIVER_CONFIG";
++        case EV_EFI_VARIABLE_BOOT: return "EV_EFI_VARIABLE_BOOT";
++        case EV_EFI_BOOT_SERVICES_APPLICATION: return "EV_EFI_BOOT_SERVICES_APPLICATION";
++        case EV_EFI_BOOT_SERVICES_DRIVER: return "EV_EFI_BOOT_SERVICES_DRIVER";
++        case EV_EFI_RUNTIME_SERVICES_DRIVER: return "EV_EFI_RUNTIME_SERVICES_DRIVER";
++        case EV_EFI_GPT_EVENT: return "EV_EFI_GPT_EVENT";
++        case EV_EFI_ACTION: return "EV_EFI_ACTION";
++        case EV_EFI_PLATFORM_FIRMWARE_BLOB: return "EV_EFI_PLATFORM_FIRMWARE_BLOB";
++        case EV_EFI_HANDOFF_TABLES: return "EV_EFI_HANDOFF_TABLES";
++        case EV_EFI_VARIABLE_AUTHORITY: return "EV_EFI_VARIABLE_AUTHORITY";
++        default: return "UNKNOWN";
++    }
++}
++
++/* Add function to get algorithm name */
++static const char* get_algorithm_string(uint16_t algoid)
++{
++    switch(algoid) {
++        case TPM_ALG_ERROR: return "TPM_ALG_ERROR";
++        case TPM_ALG_RSA: return "TPM_ALG_RSA";
++        case TPM_ALG_SHA1: return "TPM_ALG_SHA1";
++        case TPM_ALG_SHA256: return "TPM_ALG_SHA256";
++        case TPM_ALG_SHA384: return "TPM_ALG_SHA384";
++        case TPM_ALG_SHA512: return "TPM_ALG_SHA512";
++        case TPM_ALG_ECDSA: return "TPM_ALG_ECDSA";
++        default: return "UNKNOWN";
++    }
++}
++
++/* Add function to get digest length */
++static int get_digest_size(uint16_t algoid)
++{
++    switch(algoid) {
++        case TPM_ALG_SHA1: return 20;
++        case TPM_ALG_SHA256: return 32;
++        case TPM_ALG_SHA384: return 48;
++        case TPM_ALG_SHA512: return 64;
++        default: return 0;
++    }
++}
++
++bool vcca_event_log_process(vcca_event_log_t* log)
++{
++    if (!log) {
++        return false;
++    }
++
++    printf("=> Read Event Log Data - Address: 0x%zX(0x%zX)\n",
++           log->log_base, log->log_length);
++
++    size_t pos = 0;
++    vcca_event_log_entry_t entry = {0};
++    int entry_count = 0;
++
++    while (pos < log->blob.length) {
++        if (!process_event_log_entry(log, &pos, &entry)) {
++            break;
++        }
++
++        printf("\n==== VCCA Event Log Entry - %d [0x%zX] ====\n",
++               entry_count, log->log_base + pos - entry.event_size);
++        /* REM index */
++        printf("REM               : %d\n", entry.rem_index);
++        printf("Type              : 0x%X (%s)\n", entry.event_type,
++               get_event_type_string(entry.event_type));
++        printf("Length            : %d\n", entry.event_size);
++
++        if (entry.event_type == 0x3) { /* EV_NO_ACTION */
++            printf("Algorithms Number : %d\n", entry.algorithms_number);
++            for (uint32_t i = 0; i < entry.algorithms_number; i++) {
++                printf("  Algorithms[0x%X] Size: %d\n",
++                       entry.algorithms[i].algoid,
++                       entry.algorithms[i].digestsize * 8);
++            }
++        }
++
++        if (entry.digest_count > 0) {
++            printf("Algorithms ID     : %d (%s)\n",
++                   entry.alg_ids[0],
++                   get_algorithm_string(entry.alg_ids[0]));
++            
++            int digest_size = get_digest_size(entry.alg_ids[0]);
++            if (digest_size > 0) {
++                printf("Digest[0] :\n");
++                print_hex_dump(entry.digests, digest_size, 0);
++            }
++        }
++
++        if (entry.event_size > 0 && entry.event) {
++            printf("RAW DATA: ----------------------------------------------\n");
++            print_hex_dump(entry.event, entry.event_size,
++                         log->log_base + pos - entry.event_size);
++            printf("RAW DATA: ----------------------------------------------\n");
++        }
++
++        /* Free memory */
++        if (entry.digests) {
++            free(entry.digests);
++            entry.digests = NULL;
++        }
++        if (entry.alg_ids) {
++            free(entry.alg_ids);
++            entry.alg_ids = NULL;
++        }
++        if (entry.event) {
++            free(entry.event);
++            entry.event = NULL;
++        }
++        if (entry.algorithms) {
++            free(entry.algorithms);
++            entry.algorithms = NULL;
++        }
++        entry_count++;
++    }
++
++    return true;
++}
++
++bool vcca_event_log_replay(vcca_event_log_t* log)
++{
++    if (!log) {
++        return false;
++    }
++
++    size_t pos = 0;
++    vcca_event_log_entry_t entry = {0};
++    bool success = true;
++
++    printf("\n=> Replay Rolling Hash - REM\n");
++
++    /* Initialize all REM values to 0 */
++    for (int i = 0; i < REM_COUNT; i++) {
++        rem_init(&log->rems[i]);
++    }
++
++    /* Create firmware state object */
++    vcca_firmware_log_state_t* firmware_state = vcca_firmware_log_state_create(log);
++    if (!firmware_state) {
++        printf("Error: Failed to create firmware state\n");
++        return false;
++    }
++
++    /* First pass: Process EV_NO_ACTION events */
++    while (pos < log->blob.length) {
++        if (!process_event_log_entry(log, &pos, &entry)) {
++            break;
++        }
++
++        /* Check if reached end of file */
++        if (entry.rem_index == VCCA_EVENT_LOG_MAGIC &&
++            entry.event_type == VCCA_EVENT_LOG_MAGIC) {
++            break;
++        }
++
++        if (entry.event_type == 0x3) { /* EV_NO_ACTION */
++            if (entry.rem_index < REM_COUNT && entry.digest_count > 0) {
++                update_rem(&log->rems[entry.rem_index], entry.digests);
++            }
++        }
++
++        /* Free memory */
++        if (entry.digests) {
++            free(entry.digests);
++            entry.digests = NULL;
++        }
++        if (entry.event) {
++            free(entry.event);
++            entry.event = NULL;
++        }
++    }
++
++    /* Reset position */
++    pos = 0;
++
++    /* Second pass: Process other events */
++    while (pos < log->blob.length) {
++        if (!process_event_log_entry(log, &pos, &entry)) {
++            break;
++        }
++
++        /* Check if reached end of file */
++        if (entry.rem_index == VCCA_EVENT_LOG_MAGIC &&
++            entry.event_type == VCCA_EVENT_LOG_MAGIC) {
++            break;
++        }
++
++        if (entry.event_type != 0x3) { /* Non EV_NO_ACTION */
++            if (entry.rem_index < REM_COUNT && entry.digest_count > 0) {
++                update_rem(&log->rems[entry.rem_index], entry.digests);
++            }
++        }
++
++        /* Free memory */
++        if (entry.digests) {
++            free(entry.digests);
++            entry.digests = NULL;
++        }
++        if (entry.event) {
++            free(entry.event);
++            entry.event = NULL;
++        }
++    }
++
++    /* Print final REM values */
++    for (int i = 0; i < REM_COUNT; i++) {
++        printf("\n==== REM[%d] ====\n", i);
++        print_hex_dump(log->rems[i].data, REM_LENGTH_BYTES, 0);
++    }
++
++    /* Extract firmware state information */
++    if (!vcca_firmware_log_state_extract(log, firmware_state)) {
++        printf("Warning: Failed to extract complete firmware state\n");
++        success = false;
++    } else {
++        /* Print firmware state information */
++        vcca_firmware_log_state_print(firmware_state);
++    }
++
++    /* Free firmware state object */
++    vcca_firmware_log_state_free(firmware_state);
++
++    return success;
++}
++
++void vcca_event_log_dump(vcca_event_log_t* log)
++{
++    if (!log) {
++        return;
++    }
++
++    printf("Event log base: 0x%zX, length: 0x%zX\n", log->log_base, log->log_length);
++    printf("Actual data size: %zu bytes\n\n", log->blob.length);
++
++    vcca_event_log_process(log);
++    printf("\n");  /* Add empty line */
++    vcca_event_log_replay(log);
++}
+\ No newline at end of file
+diff --git a/samples/virtcca-client/vcca_firmware_state.c b/samples/virtcca-client/vcca_firmware_state.c
+new file mode 100644
+index 0000000..ec45184
+--- /dev/null
++++ b/samples/virtcca-client/vcca_firmware_state.c
+@@ -0,0 +1,285 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include "vcca_event_log.h"
++#include "vcca_firmware_state.h"
++
++/* Helper function: Extract EFI image information from event data */
++static bool extract_efi_image(vcca_event_log_entry_t* entry, vcca_efi_image_t* image)
++{
++    if (!entry || !image || !entry->digests || entry->digest_count == 0) {
++        return false;
++    }
++
++    /* Only extract image hash */
++    image->image_hash_size = SHA256_DIGEST_LENGTH;
++    image->image_hash = (uint8_t*)malloc(image->image_hash_size);
++    if (!image->image_hash) {
++        return false;
++    }
++    memcpy(image->image_hash, entry->digests, image->image_hash_size);
++    return true;
++}
++
++/* Helper function: Extract GRUB information from event data */
++static bool extract_grub_info(vcca_event_log_entry_t* entry, vcca_grub_state_t* grub)
++{
++    if (!entry || !grub || !entry->event || entry->event_size == 0) {
++        return false;
++    }
++
++    /* Check if it's a grub.cfg file */
++    const char* grub_cfg = "grub.cfg";
++    bool is_grub_cfg = false;
++    for (uint32_t i = 0; i < entry->event_size - strlen(grub_cfg); i++) {
++        if (memcmp(entry->event + i, grub_cfg, strlen(grub_cfg)) == 0) {
++            is_grub_cfg = true;
++            break;
++        }
++    }
++
++    if (!is_grub_cfg) {
++        return false;
++    }
++
++    /* Extract configuration hash */
++    if (entry->digest_count > 0 && entry->digests) {
++        grub->config_hash_size = SHA256_DIGEST_LENGTH;
++        grub->config_hash = (uint8_t*)malloc(grub->config_hash_size);
++        if (!grub->config_hash) {
++            return false;
++        }
++        memcpy(grub->config_hash, entry->digests, grub->config_hash_size);
++        return true;
++    }
++
++    return false;
++}
++
++/* Helper function: Print hexadecimal data */
++static void print_hex(const uint8_t* data, size_t len)
++{
++    for (size_t i = 0; i < len; i++) {
++        printf("%02x", data[i]);
++    }
++}
++
++/* Helper function: Search for substring in data */
++static const uint8_t* find_substring(const uint8_t* data, size_t data_len, const char* substr, size_t substr_len)
++{
++    if (!data || !substr || data_len < substr_len) {
++        return NULL;
++    }
++    
++    for (size_t i = 0; i <= data_len - substr_len; i++) {
++        if (memcmp(data + i, substr, substr_len) == 0) {
++            return data + i;
++        }
++    }
++    return NULL;
++}
++
++/* Print firmware state information */
++void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state)
++{
++    if (!state) {
++        printf("Firmware state is empty\n");
++        return;
++    }
++
++    printf("\n============ Firmware Log State ============\n");
++    printf("Hash Algorithm: 0x%x\n", state->hash_algo);
++
++    /* Print EFI state */
++    if (state->efi) {
++        printf("\n----- EFI State -----\n");
++        printf("Image Count: %u\n", state->efi->image_count);
++        for (uint32_t i = 0; i < state->efi->image_count; i++) {
++            printf("\nImage[%u]:\n", i);
++            if (state->efi->images[i].image_hash) {
++                printf("  Hash: ");
++                print_hex(state->efi->images[i].image_hash, state->efi->images[i].image_hash_size);
++                printf("\n");
++            }
++        }
++    }
++
++    /* Print GRUB conf state */
++    if (state->grub) {
++        printf("\n----- GRUB conf State -----\n");
++        if (state->grub->config_hash) {
++            printf("Config Hash: ");
++            print_hex(state->grub->config_hash, state->grub->config_hash_size);
++            printf("\n");
++        }
++    }
++
++    /* Print Linux kernel state */
++    if (state->linux_kernel) {
++        printf("\n----- Linux Kernel State -----\n");
++        if (state->linux_kernel->kernel_hash) {
++            printf("Kernel Hash: ");
++            print_hex(state->linux_kernel->kernel_hash, state->linux_kernel->kernel_hash_size);
++            printf("\n");
++        }
++        if (state->linux_kernel->initrd_hash) {
++            printf("Initrd Hash: ");
++            print_hex(state->linux_kernel->initrd_hash, state->linux_kernel->initrd_hash_size);
++            printf("\n");
++        }
++    }
++
++    printf("\n=====================================\n");
++}
++
++/* Create firmware log state */
++vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log)
++{
++    vcca_firmware_log_state_t* state = (vcca_firmware_log_state_t*)calloc(1, sizeof(vcca_firmware_log_state_t));
++    if (!state) {
++        return NULL;
++    }
++
++    state->efi = (vcca_efi_state_t*)calloc(1, sizeof(vcca_efi_state_t));
++    state->grub = (vcca_grub_state_t*)calloc(1, sizeof(vcca_grub_state_t));
++    state->linux_kernel = (vcca_linux_kernel_state_t*)calloc(1, sizeof(vcca_linux_kernel_state_t));
++
++    if (!state->efi || !state->grub || !state->linux_kernel) {
++        vcca_firmware_log_state_free(state);
++        return NULL;
++    }
++
++    return state;
++}
++
++/* Free firmware log state */
++void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state)
++{
++    if (!state) {
++        return;
++    }
++
++    if (state->efi) {
++        for (uint32_t i = 0; i < state->efi->image_count; i++) {
++            free(state->efi->images[i].image_hash);
++        }
++        free(state->efi->images);
++        free(state->efi);
++    }
++
++    if (state->grub) {
++        free(state->grub->config_hash);
++        free(state->grub);
++    }
++
++    if (state->linux_kernel) {
++        free(state->linux_kernel->kernel_hash);
++        free(state->linux_kernel->initrd_hash);
++        free(state->linux_kernel);
++    }
++
++    free(state->raw_events);
++    free(state);
++}
++
++/* Extract firmware log state */
++bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_state_t* state)
++{
++    if (!log || !state) {
++        return false;
++    }
++
++    size_t pos = 0;
++    vcca_event_log_entry_t entry;
++    uint32_t efi_image_count = 0;
++    bool has_grub_info = false;
++    bool has_kernel_info = false;
++    bool has_initrd_info = false;
++
++    /* First pass: Count EFI images */
++    while (process_event_log_entry(log, &pos, &entry)) {
++        if (entry.event_type == EV_EFI_BOOT_SERVICES_APPLICATION) {
++            efi_image_count++;
++        }
++    }
++
++    /* Allocate EFI image array */
++    if (efi_image_count > 0) {
++        state->efi->images = (vcca_efi_image_t*)calloc(efi_image_count, sizeof(vcca_efi_image_t));
++        if (!state->efi->images) {
++            return false;
++        }
++    }
++
++    /* Reset position */
++    pos = 0;
++    uint32_t current_efi_index = 0;
++
++    /* Second pass: Extract detailed information */
++    while (process_event_log_entry(log, &pos, &entry)) {
++        /* Process EFI images */
++        if (entry.event_type == EV_EFI_BOOT_SERVICES_APPLICATION) {
++            if (extract_efi_image(&entry, &state->efi->images[current_efi_index])) {
++                current_efi_index++;
++            }
++        /* Process GRUB configuration file */
++        } else if (entry.event_type == EV_IPL && !has_grub_info) {
++            if (extract_grub_info(&entry, state->grub)) {
++                has_grub_info = true;
++            }
++        /* Process kernel and initrd */
++        } else if (entry.event_type == EV_IPL) {
++            /* Check if it's a kernel file path */
++            if (!has_kernel_info && entry.event && entry.event_size > 0) {
++                const char* kernel_path = "/vmlinuz-";
++                if (find_substring(entry.event, entry.event_size, kernel_path, strlen(kernel_path)) &&
++                    !find_substring(entry.event, entry.event_size, "grub_cmd:", strlen("grub_cmd:"))) {
++                    if (entry.digest_count > 0 && entry.digests) {
++                        state->linux_kernel->kernel_hash_size = SHA256_DIGEST_LENGTH;
++                        state->linux_kernel->kernel_hash = (uint8_t*)malloc(state->linux_kernel->kernel_hash_size);
++                        if (state->linux_kernel->kernel_hash) {
++                            memcpy(state->linux_kernel->kernel_hash, entry.digests,
++                                      state->linux_kernel->kernel_hash_size);
++                            has_kernel_info = true;
++                        }
++                    }
++                }
++            /* Check if it's an initrd file path */
++            } else if (!has_initrd_info && entry.event && entry.event_size > 0) {
++                const char* initrd_path = "/initramfs-";
++                if (find_substring(entry.event, entry.event_size, initrd_path, strlen(initrd_path)) &&
++                    !find_substring(entry.event, entry.event_size, "grub_cmd:", strlen("grub_cmd:"))) {
++                    if (entry.digest_count > 0 && entry.digests) {
++                        state->linux_kernel->initrd_hash_size = SHA256_DIGEST_LENGTH;
++                        state->linux_kernel->initrd_hash = (uint8_t*)malloc(state->linux_kernel->initrd_hash_size);
++                        if (state->linux_kernel->initrd_hash) {
++                            memcpy(state->linux_kernel->initrd_hash, entry.digests,
++                                      state->linux_kernel->initrd_hash_size);
++                            has_initrd_info = true;
++                        }
++                    }
++                }
++            }
++        }
++
++        /* Release memory */
++        if (entry.digests) {
++            free(entry.digests);
++            entry.digests = NULL;
++        }
++        if (entry.event) {
++            free(entry.event);
++            entry.event = NULL;
++        }
++        if (entry.algorithms) {
++            free(entry.algorithms);
++            entry.algorithms = NULL;
++        }
++    }
++
++    /* Update state information */
++    state->efi->image_count = current_efi_index;
++    state->hash_algo = TPM_ALG_SHA256; /* Currently fixed to use SHA256 */
++
++    return true;
++}
+\ No newline at end of file
+diff --git a/samples/virtcca-client/verify.c b/samples/virtcca-client/verify.c
+new file mode 100644
+index 0000000..1c90852
+--- /dev/null
++++ b/samples/virtcca-client/verify.c
+@@ -0,0 +1,362 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <ctype.h>
++#include "config.h"
++#include "binary_blob.h"
++#include "vcca_event_log.h"
++#include "vcca_firmware_state.h"
++#include "verify.h"
++
++/* Length of REM value read from rem.txt file (each value is 32 bytes, represented as 64 hex characters) */
++#define REM_HEX_LENGTH 64
++#define HASH_STR_LENGTH 64
++
++/* Forward declarations of all static functions */
++static bool hex_str_to_bytes(const char* hex_str, uint8_t* bytes, size_t length);
++static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
++static bool parse_json_file(const char* filename, firmware_reference_t* ref);
++static void free_firmware_reference(firmware_reference_t* ref);
++static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
++                                     const uint8_t* actual_hash, size_t hash_size);
++static char* extract_json_string(const char* json, const char* key);
++
++static bool hex_str_to_bytes(const char* hex_str, uint8_t* bytes, size_t length)
++{
++    if (!hex_str || !bytes || strlen(hex_str) != length * 2) {
++        return false;
++    }
++
++    for (size_t i = 0; i < length; i++) {
++        char hex[3] = {hex_str[i * 2], hex_str[i * 2 + 1], 0};
++        unsigned int value;
++        if (sscanf(hex, "%02x", &value) != 1) {
++            return false;
++        }
++        bytes[i] = (uint8_t)value;
++    }
++    return true;
++}
++
++bool read_token_rem(rem_t rems[REM_COUNT])
++{
++    /* Read REM file content */
++    size_t file_size;
++    char* file_content = read_text_file(g_config.rem_file, &file_size);
++    if (!file_content) {
++        return false;
++    }
++
++    char* line = file_content;
++    int rem_index = 0;
++    bool success = false;
++
++    /* Process each line */
++    while (line && rem_index < REM_COUNT) {
++        /* Find end of line */
++        char* newline = strchr(line, '\n');
++        if (newline) {
++            *newline = '\0';
++        }
++
++        /* Find REM marker */
++        char* pos = strstr(line, "REM[");
++        if (pos) {
++            /* Find the REM value hex string */
++            pos = strchr(line, ':');
++            if (pos) {
++                pos++; /* Skip colon */
++
++                /* Skip spaces */
++                while (*pos == ' ') {
++                    pos++;
++                }
++
++                /* Convert hex string to byte array */
++                if (!hex_str_to_bytes(pos, rems[rem_index].data, REM_LENGTH_BYTES)) {
++                    printf("Error: Failed to parse REM[%d] value\n", rem_index);
++                    goto cleanup;
++                }
++
++                rem_index++;
++            }
++        }
++
++        /* Move to next line */
++        line = newline ? newline + 1 : NULL;
++    }
++
++    success = (rem_index == REM_COUNT);
++
++cleanup:
++    free(file_content);
++    return success;
++}
++
++void verify_single_rem(int rem_index, const rem_t* rem1, const rem_t* rem2)
++{
++    if (!rem1 || !rem2) {
++        printf("Error: Invalid REM pointers for verification\n");
++        return;
++    }
++
++    if (rem_compare(rem1, rem2)) {
++        printf("REM[%d] passed the verification.\n", rem_index);
++    } else {
++        printf("REM[%d] did not pass the verification\n", rem_index);
++        printf("Expected: ");
++        rem_dump(rem1);
++        printf("Got:      ");
++        rem_dump(rem2);
++    }
++}
++
++bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_t* state)
++{
++    if (!json_file || !state) {
++        return false;
++    }
++
++    firmware_reference_t ref = {0};
++    bool result = false;
++
++    /* Parse JSON file */
++    if (!parse_json_file(json_file, &ref)) {
++        printf("Error: Failed to parse JSON file\n");
++        return false;
++    }
++
++    /* Verify hash algorithm */
++    if (strcmp(ref.hash_alg, "sha-256") != 0) {
++        printf("Error: Unsupported hash algorithm: %s\n", ref.hash_alg);
++        goto cleanup;
++    }
++
++    printf("\nVerifying firmware components...\n");
++
++    /* Verify EFI state (grub) */
++    if (state->efi && state->efi->image_count > 0) {
++        bool found_match = false;
++        for (uint32_t i = 0; i < state->efi->image_count; i++) {
++            if (compare_and_print_hash("GRUB", ref.grub,
++                state->efi->images[i].image_hash,
++                state->efi->images[i].image_hash_size)) {
++                found_match = true;
++                break;
++            }
++        }
++        if (!found_match) {
++            goto cleanup;
++        }
++    }
++
++    /* Verify GRUB configuration */
++    if (state->grub && state->grub->config_hash) {
++        if (!compare_and_print_hash("GRUB config", ref.grub_cfg,
++            state->grub->config_hash,
++            state->grub->config_hash_size)) {
++            goto cleanup;
++        }
++    }
++
++    /* Verify kernel and initramfs */
++    if (state->linux_kernel) {
++        if (state->linux_kernel->kernel_hash) {
++            if (!compare_and_print_hash("Kernel", ref.kernel,
++                state->linux_kernel->kernel_hash,
++                state->linux_kernel->kernel_hash_size)) {
++                goto cleanup;
++            }
++        }
++        if (state->linux_kernel->initrd_hash) {
++            if (!compare_and_print_hash("Initramfs", ref.initramfs,
++                state->linux_kernel->initrd_hash,
++                state->linux_kernel->initrd_hash_size)) {
++                goto cleanup;
++            }
++        }
++    }
++
++    printf("\nAll firmware components verification passed\n");
++    result = true;
++
++cleanup:
++    free_firmware_reference(&ref);
++    return result;
++}
++
++bool verify_rem(void)
++{
++    printf("=> Verify REM\n");
++    /* 1. Read CCEL file */
++    size_t file_size;
++    uint8_t* ccel_data = read_file_data(g_config.ccel_file, &file_size);
++    if (!ccel_data) {
++        return false;
++    }
++
++    /* 2. Get the start address and length of event log area from CCEL */
++    /* The processing is simplified here. The CCEL structure should be parsed. */
++    size_t log_area_start = 0;  /* Actually read from CCEL */
++    size_t log_area_length = 0;
++
++    /* 3. Initialize event log processor */
++    vcca_event_log_t event_log;
++    if (!vcca_event_log_init(&event_log, log_area_start, log_area_length)) {
++        free(ccel_data);
++        return false;
++    }
++
++    /* 4. Replay event log to calculate REM values */
++    if (!vcca_event_log_replay(&event_log)) {
++        free(ccel_data);
++        return false;
++    }
++
++    /* 5. Read REM values from attestation token */
++    rem_t token_rems[REM_COUNT];
++    if (!read_token_rem(token_rems)) {
++        printf("Error: Could not read REM file: %s\n", g_config.rem_file);
++        free(ccel_data);
++        return false;
++    }
++
++    /* 6. Verify each REM value */
++    printf("\nVerifying REM values...\n");
++    bool all_rems_passed = true;
++    for (int i = 0; i < REM_COUNT; i++) {
++        verify_single_rem(i, &token_rems[i], &event_log.rems[i]);
++        if (!rem_compare(&token_rems[i], &event_log.rems[i])) {
++            all_rems_passed = false;
++        }
++    }
++
++    if (!all_rems_passed) {
++        printf("\nREM verification failed, skipping firmware state verification\n");
++        free(ccel_data);
++        return false;
++    }
++
++    printf("\nAll REM values verified successfully\n");
++
++    /* 7. If JSON file is provided and REM verification passed, verify firmware state */
++    bool final_result = true;
++    if (g_config.json_file) {
++        printf("\nVerifying firmware state...\n");
++        vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
++        if (!state) {
++            printf("Error: Failed to create firmware state\n");
++            free(ccel_data);
++            return false;
++        }
++
++        if (!vcca_firmware_log_state_extract(&event_log, state)) {
++            printf("Error: Failed to extract firmware state\n");
++            vcca_firmware_log_state_free(state);
++            free(ccel_data);
++            return false;
++        }
++
++        if (!verify_firmware_state(g_config.json_file, state)) {
++            printf("Error: Firmware state verification failed\n");
++            vcca_firmware_log_state_free(state);
++            free(ccel_data);
++            final_result = false;
++        }
++
++        vcca_firmware_log_state_free(state);
++    }
++
++    free(ccel_data);
++    return final_result;
++}
++
++/* Helper function: Convert byte array to hex string */
++static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
++{
++    for (size_t i = 0; i < len; i++) {
++        sprintf(hex_str + (i * 2), "%02x", bytes[i]);
++    }
++}
++
++/* Helper function: Extract string value from JSON */
++static char* extract_json_string(const char* json, const char* key)
++{
++    char* value = NULL;
++    char search_key[64];
++    snprintf(search_key, sizeof(search_key), "\"%s\":", key);
++    
++    char* pos = strstr(json, search_key);
++    if (pos) {
++        pos = strchr(pos + strlen(search_key), '"');
++        if (pos) {
++            pos++; /* Skip quote */
++            char* end = strchr(pos, '"');
++            if (end) {
++                size_t len = end - pos;
++                value = (char*)malloc(len + 1);
++                if (value) {
++                    strncpy(value, pos, len);
++                    value[len] = '\0';
++                }
++            }
++        }
++    }
++    return value;
++}
++
++/* Helper function: Parse JSON file */
++static bool parse_json_file(const char* filename, firmware_reference_t* ref)
++{
++    if (!filename || !ref) {
++        return false;
++    }
++
++    size_t file_size;
++    char* json_content = read_text_file(filename, &file_size);
++    if (!json_content) {
++        return false;
++    }
++
++    ref->grub = extract_json_string(json_content, "grub");
++    ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
++    ref->kernel = extract_json_string(json_content, "kernel");
++    ref->initramfs = extract_json_string(json_content, "initramfs");
++    ref->hash_alg = extract_json_string(json_content, "hash_alg");
++
++    free(json_content);
++    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
++}
++
++/* Helper function: Free JSON parsing results */
++static void free_firmware_reference(firmware_reference_t* ref)
++{
++    if (!ref) {
++        return;
++    }
++    free(ref->grub);
++    free(ref->grub_cfg);
++    free(ref->kernel);
++    free(ref->initramfs);
++    free(ref->hash_alg);
++}
++
++/* Helper function: Compare hash value and print result */
++static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
++                                      const uint8_t* actual_hash, size_t hash_size)
++{
++    if (!ref_hash || !actual_hash) {
++        return false;
++    }
++    
++    char actual_hex[HASH_STR_LENGTH + 1] = {0};
++    bytes_to_hex_string(actual_hash, hash_size, actual_hex);
++    
++    bool match = (strncmp(ref_hash, actual_hex, HASH_STR_LENGTH) == 0);
++    printf("\n%s verification %s\n", component_name, match ? "passed" : "failed");
++    printf("Expected: %s\n", ref_hash);
++    printf("Got:      %s\n", actual_hex);
++    return match;
++}
+\ No newline at end of file
+diff --git a/samples/virtcca-server/CMakeLists.txt b/samples/virtcca-server/CMakeLists.txt
+index 12b2ede..aaa14ef 100644
+--- a/samples/virtcca-server/CMakeLists.txt
++++ b/samples/virtcca-server/CMakeLists.txt
+@@ -8,6 +8,7 @@ set(INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../../src/include/rats-tls
+                     ${RATS_TLS_INSTALL_INCLUDE_PATH}
+                     ${RATS_TLS_INSTALL_INCLUDE_PATH}/edl
++                    ${CMAKE_CURRENT_SOURCE_DIR}/../virtcca-client/utils/inc
+                     )
+ set(LIBRARY_DIRS ${RATS_TLS_INSTALL_LIB_PATH})
+ 
+@@ -19,7 +20,7 @@ set(SOURCES rats-server.c)
+ 
+ # Generate bin file
+ add_executable(${PROJECT_NAME} ${SOURCES})
+-target_link_libraries(${PROJECT_NAME} rats_tls)
++target_link_libraries(${PROJECT_NAME} rats_tls utils)
+ 
+ install(TARGETS ${PROJECT_NAME}
+ 	    DESTINATION ${RATS_TLS_INSTALL_BIN_PATH})
+diff --git a/samples/virtcca-server/rats-server.c b/samples/virtcca-server/rats-server.c
+index 8bd7388..9c4ebe0 100644
+--- a/samples/virtcca-server/rats-server.c
++++ b/samples/virtcca-server/rats-server.c
+@@ -18,6 +18,8 @@
+ #include <rats-tls/api.h>
+ #include <rats-tls/log.h>
+ #include <rats-tls/claim.h>
++#include <sys/stat.h>
++#include "utils.h"
+ 
+ #define DEFAULT_PORT 1234
+ #define DEFAULT_IP   "0.0.0.0" /* Listern to connections from any ip */
+@@ -25,12 +27,19 @@
+ #define REQUEST_IMA_LOG "REQUEST_IMA_LOG"
+ #define IMA_MEASUREMENTS_PATH "/sys/kernel/security/ima/binary_runtime_measurements"
+ #define IMA_READ_BLCOK_SIZE 1024
++#define ENABLE_FDE_TOKEN "ENABLE_FDE_TOKEN"
++#define MAX_PASSWD_LEN 32
++#define MAX 4096
++#define CCEL_ACPI_TABLE_PATH "/sys/firmware/acpi/tables/CCEL"
++#define CCEL_EVENT_LOG_PATH "/sys/firmware/acpi/tables/data/CCEL"
++#define KEY_FILE_PATH "/root/rootfs_key.bin"
+ 
+ rats_tls_err_t read_ima_measurements(uint8_t **value, size_t *size)
+ {
+ 	FILE *file;
+ 	uint8_t buffer[IMA_READ_BLCOK_SIZE];
+ 	size_t byte_read;
++	rats_tls_err_t ret = RATS_TLS_ERR_NO_MEM;
+ 
+ 	file = fopen(IMA_MEASUREMENTS_PATH, "rb");
+ 	if (file == NULL) {
+@@ -44,16 +53,18 @@ rats_tls_err_t read_ima_measurements(uint8_t **value, size_t *size)
+ 		if (content == NULL) {
+ 			free(*value);
+ 			RTLS_ERR("memory reallocation failed");
+-			return RATS_TLS_ERR_NO_MEM;
++			goto close;
+ 		}
+ 
+ 		*value = content;
+ 		memcpy(*value + *size, buffer, byte_read);
+ 		*size += byte_read;
+ 	}
++	ret = RATS_TLS_ERR_NONE;
+ 
++close:
+ 	fclose(file);
+-	return RATS_TLS_ERR_NONE;
++	return ret;
+ }
+ 
+ int send_ima_log(rats_tls_handle handle)
+@@ -94,6 +105,95 @@ free:
+ 	return ret;
+ }
+ 
++int deal_rootfs_key(rats_tls_handle handle)
++{
++	uint8_t key_file[MAX] = {};
++	size_t len = sizeof(key_file);
++	int ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++
++	ret = rats_tls_receive(handle, key_file, &len);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to receive %#x\n", ret);
++		return ret;
++	}
++
++	ret = save_file_data(KEY_FILE_PATH, key_file, len) ? 0 : 1;
++    if (ret != 0) {
++        RTLS_ERR("Failed to save key file data.\n");
++        return ret;
++    }
++
++	return RATS_TLS_ERR_NONE;
++}
++
++int send_ccel_data(rats_tls_handle handle)
++{
++    size_t ccel_size = 0;
++    uint8_t *ccel_data = NULL;
++    int ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++
++    ccel_data = read_file_data(CCEL_ACPI_TABLE_PATH, &ccel_size);
++    if (!ccel_data) {
++        RTLS_ERR("Failed to read CCEL ACPI table data\n");
++        return ret;
++    }
++
++    size_t len = ccel_size;
++    ret = rats_tls_transmit(handle, ccel_data, &len);
++    if (ret != RATS_TLS_ERR_NONE || len != ccel_size) {
++        RTLS_ERR("Failed to send CCEL ACPI table data %#x\n", ret);
++        ret = RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++        goto free;
++    }
++
++    RTLS_INFO("Successfully sent CCEL ACPI table (%zu bytes)\n", ccel_size);
++
++free:
++    free(ccel_data);
++    return ret;
++}
++
++int send_event_log(rats_tls_handle handle)
++{
++    size_t event_log_size = 0;
++    uint8_t *event_log = NULL;
++    int ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++
++    event_log = read_file_data(CCEL_EVENT_LOG_PATH, &event_log_size);
++    if (!event_log) {
++        RTLS_ERR("Failed to read event log data\n");
++        return ret;
++    }
++
++    /* First send the event log size */
++    size_t len = sizeof(size_t);
++    ret = rats_tls_transmit(handle, &event_log_size, &len);
++    if (ret != RATS_TLS_ERR_NONE || len != sizeof(size_t)) {
++        RTLS_ERR("Failed to send event log size %#x\n", ret);
++        ret = RATS_TLS_ERR_LOAD_TLS_WRAPPERS;
++        goto free;
++    }
++
++    /* Then send the event log data */
++    size_t send_size = 0;
++    while (send_size < event_log_size) {
++        len = event_log_size - send_size;
++        ret = rats_tls_transmit(handle, event_log + send_size, &len);
++        if (ret != RATS_TLS_ERR_NONE) {
++            RTLS_ERR("Failed to send event log data at offset %zu %#x\n", send_size, ret);
++            goto free;
++        }
++        send_size += len;
++        RTLS_INFO("Sent %zu of %zu bytes\n", send_size, event_log_size);
++    }
++
++    RTLS_INFO("Successfully sent complete event log (%zu bytes)\n", event_log_size);
++
++free:
++    free(event_log);
++    return ret;
++}
++
+ int deal_client_req(rats_tls_handle handle)
+ {
+ 	int ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
+@@ -112,19 +212,41 @@ int deal_client_req(rats_tls_handle handle)
+ 
+ 	RTLS_INFO("Received from Client: %s\n", buf);
+ 
++	/* Process CCEL table request */
++	if (strncmp(buf, "REQUEST_CCEL_TABLE", strlen("REQUEST_CCEL_TABLE")) == 0) {
++		ret = send_ccel_data(handle);
++		if (ret) {
++			RTLS_ERR("Send CCEL ACPI table failed %#x\n", ret);
++			return ret;
++		}
++		RTLS_INFO("Send CCEL ACPI table success\n");
++		return deal_client_req(handle);
++	}
++
++	/* Process event log request */
++	if (strncmp(buf, "REQUEST_EVENT_LOG", strlen("REQUEST_EVENT_LOG")) == 0) {
++		ret = send_event_log(handle);
++		if (ret) {
++			RTLS_ERR("Send event log failed %#x\n", ret);
++			return ret;
++		}
++		RTLS_INFO("Send event log success\n");
++		return deal_client_req(handle);
++	}
++
++	/* Process TOKEN */
+ 	if (strncmp(buf, TOKEN, strlen(TOKEN)) == 0) {
+-		/* do custome operation here.
+-		 * then return success for other jobs, eg. switch rootfs.
+-		 */
+ 		strcpy(buf, "Attestation Passed, Swtiching Root.....");
+-		/* Reply back to the client */
+ 		len = sizeof(buf);
+ 		ret = rats_tls_transmit(handle, buf, &len);
+ 		if (ret != RATS_TLS_ERR_NONE) {
+ 			RTLS_ERR("Failed to transmit %#x\n", ret);
++			return ret;
+ 		}
+-		ret = RATS_TLS_ERR_NONE;
+-	} else if (strncmp(buf, REQUEST_IMA_LOG, strlen(REQUEST_IMA_LOG)) == 0) {
++		return RATS_TLS_ERR_NONE;  /* Return success directly */
++	}
++	
++	if (strncmp(buf, REQUEST_IMA_LOG, strlen(REQUEST_IMA_LOG)) == 0) {
+ 		ret = send_ima_log(handle);
+ 		if (ret) {
+ 			RTLS_ERR("Send IMA log failed %#x\n", ret);
+@@ -133,23 +255,40 @@ int deal_client_req(rats_tls_handle handle)
+ 			/* expect receive the PASS TOKEN */
+ 			ret = deal_client_req(handle);
+ 		}
+-	} else {
+-		strcpy(buf, "Attestation Failed, Continue.....");
+-		/* Reply back to the client */
+-		len = sizeof(buf);
+-		ret = rats_tls_transmit(handle, buf, &len);
+-		if (ret != RATS_TLS_ERR_NONE) {
+-			RTLS_ERR("Failed to transmit %#x\n", ret);
++		return ret;
++	}
++
++	if (strncmp(buf, ENABLE_FDE_TOKEN, strlen(ENABLE_FDE_TOKEN)) == 0) {
++		ret = deal_rootfs_key(handle);
++		if (ret) {
++			RTLS_ERR("Save rootfs key failed %#x\n", ret);
++		} else {
++			RTLS_INFO("Save rootfs key success\n");
++			/* expect receive the PASS TOKEN */
++			if ((ret = deal_client_req(handle))) {
++				RTLS_ERR("recevice PASS ACK failed %#x\n", ret);
++				return ret;
++			}
++			ret = 0x68; /* Return specific value for LUKS completion */
+ 		}
+-		ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++		return ret;
+ 	}
+ 
++	strcpy(buf, "Attestation Failed, Continue.....");
++	/* Reply back to the client */
++	len = sizeof(buf);
++	ret = rats_tls_transmit(handle, buf, &len);
++	if (ret != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to transmit %#x\n", ret);
++	}
++	ret = ENCLAVE_ATTESTER_ERR_UNKNOWN;
++
+ 	return ret;
+ }
+ 
+ int rats_tls_server_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 			    char *verifier_type, char *tls_type, char *crypto_type, bool mutual,
+-				bool provide_endorsements, char *ip, int port)
++			    bool provide_endorsements, bool use_fde, char *ip, int port)
+ {
+ 	rats_tls_conf_t conf;
+ 	rats_tls_err_t ret;
+@@ -257,23 +396,29 @@ int rats_tls_server_startup(rats_tls_log_level_t log_level, char *attester_type,
+ 		}
+ 
+ 		RTLS_DEBUG("Client connected successfully\n");
+-		if ((ret = deal_client_req(handle))) {
++		ret = deal_client_req(handle);
++		if (ret != RATS_TLS_ERR_NONE && ret != 0x68) {
+ 			RTLS_ERR("Client verify failed %#x\n", ret);
+ 		} else {
+ 			RTLS_INFO("Client verify success, do other jobs.\n");
++			close(connd);
+ 			break;
+ 		}
+ 
+-close_connd:
++	close_connd:
+ 		close(connd);
+ 	}
+ 
+ 	shutdown(sockfd, SHUT_RDWR);
+ 	close(sockfd);
+-	ret = rats_tls_cleanup(handle);
+-	if (ret != RATS_TLS_ERR_NONE) {
+-		RTLS_ERR("Failed to cleanup %#x\n", ret);
+-		return ret;
++
++	if (rats_tls_cleanup(handle) != RATS_TLS_ERR_NONE) {
++		RTLS_ERR("Failed to cleanup\n");
++		return RATS_TLS_ERR_INVALID;
++	}
++	
++	if (ret == 0x68) {
++		return 0x68;
+ 	} else {
+ 		return 0x67;
+ 	}
+@@ -281,16 +426,15 @@ close_connd:
+ err:
+ 	/* Ignore the error code of cleanup in order to return the prepositional error */
+ 	shutdown(sockfd, SHUT_RDWR);
+-    close(sockfd);
++	close(sockfd);
+ 	rats_tls_cleanup(handle);
+ 	return -1;
+-
+ }
+ 
+ int main(int argc, char **argv)
+ {
+-	char *const short_options = "a:v:t:c:mel:i:p:h";
+-	// clang-format off
++	char *const short_options = "a:v:t:c:mel:i:p:kh";
++
+         struct option long_options[] = {
+                 { "attester", required_argument, NULL, 'a' },
+                 { "verifier", required_argument, NULL, 'v' },
+@@ -301,10 +445,10 @@ int main(int argc, char **argv)
+                 { "log-level", required_argument, NULL, 'l' },
+                 { "ip", required_argument, NULL, 'i' },
+                 { "port", required_argument, NULL, 'p' },
++				{ "fdekey", no_argument, NULL, 'k'},
+                 { "help", no_argument, NULL, 'h' },
+                 { 0, 0, 0, 0 }
+         };
+-	// clang-format on
+ 
+ 	char *attester_type = "";
+ 	char *verifier_type = "";
+@@ -312,6 +456,7 @@ int main(int argc, char **argv)
+ 	char *crypto_type = "";
+ 	bool mutual = false;
+ 	bool provide_endorsements = false;
++	bool use_fde = false;
+ 	rats_tls_log_level_t log_level = RATS_TLS_LOG_LEVEL_INFO;
+ 	char *ip = DEFAULT_IP;
+ 	int port = DEFAULT_PORT;
+@@ -358,6 +503,9 @@ int main(int argc, char **argv)
+ 		case 'p':
+ 			port = atoi(optarg);
+ 			break;
++		case 'k':
++            use_fde = true;
++            break;
+ 		case -1:
+ 			break;
+ 		case 'h':
+@@ -374,6 +522,7 @@ int main(int argc, char **argv)
+ 			     "        --log-level/-l        set the log level\n"
+ 			     "        --ip/-i               set the listening ip address\n"
+ 			     "        --port/-p             set the listening tcp port\n"
++				 "        --fdekey/-k           enable Full Disk Encryption with rootfs key file\n"
+ 			     "        --help/-h             show the usage\n");
+ 			exit(1);
+ 			/* Avoid compiling warning */
+@@ -386,5 +535,5 @@ int main(int argc, char **argv)
+ 	global_log_level = log_level;
+ 
+ 	return rats_tls_server_startup(log_level, attester_type, verifier_type, tls_type,
+-				       crypto_type, mutual, provide_endorsements, ip, port);
++				       crypto_type, mutual, provide_endorsements, use_fde, ip, port);
+ }
+diff --git a/src/attesters/virtcca/collect_evidence.c b/src/attesters/virtcca/collect_evidence.c
+index 2f15551..f0b26dd 100644
+--- a/src/attesters/virtcca/collect_evidence.c
++++ b/src/attesters/virtcca/collect_evidence.c
+@@ -61,7 +61,7 @@ enclave_attester_err_t virtcca_collect_evidence(enclave_attester_ctx_t *ctx,
+ 
+ 	snprintf(evidence->type, sizeof(evidence->type), "virtcca");
+ 
+-	RTLS_DEBUG("ctx %p, evidence %p, report_len %d\n", ctx, evidence, evidence->sev.report_len);
++	RTLS_DEBUG("ctx %p, evidence %p, report_len %d\n", ctx, evidence, evidence->virtcca.report_len);
+ 
+ 	return ENCLAVE_ATTESTER_ERR_NONE;
+ }
+diff --git a/src/verifiers/virtcca/token_parse.h b/src/verifiers/virtcca/token_parse.h
+index 99b10d8..5af3bcd 100644
+--- a/src/verifiers/virtcca/token_parse.h
++++ b/src/verifiers/virtcca/token_parse.h
+@@ -90,6 +90,7 @@ typedef struct {
+ } cca_token_t;
+ 
+ #define MAX_TOKEN_SIZE (4096U)
++#define MAX_DEV_CERT_SIZE  4096
+ 
+ typedef struct {
+     uint8_t buf[MAX_TOKEN_SIZE];
+diff --git a/src/verifiers/virtcca/verify_evidence.c b/src/verifiers/virtcca/verify_evidence.c
+index 3d444d6..cac3b0e 100644
+--- a/src/verifiers/virtcca/verify_evidence.c
++++ b/src/verifiers/virtcca/verify_evidence.c
+@@ -25,6 +25,10 @@ enclave_verifier_err_t virtcca_verify_evidence(enclave_verifier_ctx_t *ctx,
+     memcpy(cca_token_buf->buf, evidence->virtcca.report + sizeof(cca_token_buf->buf_size), cca_token_buf->buf_size);
+ 
+     memcpy(&device_cert_len, evidence->virtcca.report + sizeof(cca_token_buf->buf_size) + cca_token_buf->buf_size, sizeof(device_cert_len));
++    if (device_cert_len > MAX_DEV_CERT_SIZE) {
++        RTLS_ERR("dev cert too long\n");
++        return ENCLAVE_VERIFIER_ERR_NO_MEM;
++    }
+ 
+     device_cert_data = (uint8_t *)malloc(device_cert_len);
+     if (device_cert_data == NULL) {
+-- 
+2.45.1.windows.1
+
