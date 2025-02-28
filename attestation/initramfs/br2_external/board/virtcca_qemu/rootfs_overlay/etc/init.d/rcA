@@ -20,6 +20,7 @@ echo "server return $exit_status"
 if [ $exit_status -eq 104 ]; then
 
     echo "Mounting new root filesystem to /dev/mapper/encryptfs ..."
+    cryptsetup luksOpen /dev/vda encryptfs --key-file /root/rootfs_key.bin
     mkdir -p /newroot
     mount /dev/mapper/encryptfs /newroot
 elif [ $exit_status -eq 103 ]; then
