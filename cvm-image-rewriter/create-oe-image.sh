@@ -7,6 +7,9 @@ FORCE_RECREATE=false
 TMP_GUEST_IMG_PATH="/tmp/openEuler-24.03-LTS-SP1-aarch64.qcow2"
 SIZE=50
 TMP_MOUNT_PATH="/tmp/vm_mount"
+CREATE_IMAGE=true
+MEASURE_IMAGE=true
+EULER_VERSION=""
 
 ok() {
     echo -e "\e[1;32mSUCCESS: $*\e[0;0m"
@@ -34,6 +37,7 @@ usage() {
     cat <<EOM
 Usage: $(basename "$0") [OPTION]...
   -h                        Show this help
+  -i <input image>          Specify input qcow2 image for measurement
   -f                        Force to recreate the output image
   -s                        Specify the size of guest image
   -v                        openEuler version (24.03, 24.09, ...)
@@ -45,8 +49,9 @@ EOM
 }
 
 process_args() {
-    while getopts "v:o:s:n:u:p:r:fch" option; do
+    while getopts "v:i:o:s:u:p:fch" option; do
         case "$option" in
+        i) INPUT_IMAGE=$(realpath "$OPTARG") ;;
         o) GUEST_IMG_PATH=$(realpath "$OPTARG") ;;
         s) SIZE=${OPTARG} ;;
         f) FORCE_RECREATE=true ;;
@@ -64,7 +69,20 @@ process_args() {
         esac
     done
 
-    if [[ -z "${EULER_VERSION}" ]]; then
+    if [[ -n "${INPUT_IMAGE}" ]]; then
+        CREATE_IMAGE=false
+        MEASURE_IMAGE=true
+    fi
+
+    if [[ -z "${INPUT_IMAGE}" ]]; then
+        INPUT_IMAGE=${TMP_GUEST_IMG_PATH}
+    fi
+
+    if [[ -z "${KERNEL_VERSION}" ]]; then
+        KERNEL_VERSION="6.6.0-72.0.0.76.oe2403sp1.aarch64"
+    fi
+
+    if [[ ${CREATE_IMAGE} = "true" && -z "${EULER_VERSION}" ]]; then
         error "Please specify the openEuler release by setting EULER_VERSION or passing it via -v"
     fi
 
@@ -174,74 +192,118 @@ set_guest_password() {
     if [[ -z "${GUEST_PASSWORD}" ]]; then
         GUEST_PASSWORD=openEuler12#$
     fi
-    virt-customize -a ${TMP_GUEST_IMG_PATH} --password root:password:${GUEST_PASSWORD}
+
+    virt-customize -a ${TMP_GUEST_IMG_PATH} \
+       --password root:password:${GUEST_PASSWORD} \
+       --password-crypto sha512
 }
 
 measure_guest_image() {
-    guestunmount ${TMP_MOUNT_PATH}
+    local target_image=${1}
+
+    info "Starting measurement process for: ${target_image}"
+    guestunmount ${TMP_MOUNT_PATH} 2>/dev/null || true
     gcc measure_pe.c -o MeasurePe -lcrypto
     mkdir -p ${TMP_MOUNT_PATH}
-    guestmount -a ${TMP_GUEST_IMG_PATH} -i ${TMP_MOUNT_PATH}
-    if [ $? -ne 0 ]; then
-        echo "Failed to mount the virtual machine image."
-        exit 1
-    fi
 
+    guestmount -a ${target_image} -i ${TMP_MOUNT_PATH} || error "Failed to mount the VM image."
+
+    # measure grub
     BOOT_EFI_PATH="${TMP_MOUNT_PATH}/boot/EFI/BOOT/BOOTAA64.EFI"
-    if [ ! -f "${BOOT_EFI_PATH}" ]; then
-        echo "BOOTAA64.EFI file not found in the virtual machine image."
-        guestunmount ${TMP_MOUNT_PATH}
-        exit 1
-    fi
-    sha_grub=$(./MeasurePe /tmp/vm_mount/boot/EFI/BOOT/BOOTAA64.EFI | awk -F"SHA-256 = " '{print $2}')
-    guestunmount ${TMP_MOUNT_PATH}
-    virt-customize -a ${TMP_GUEST_IMG_PATH} \
-        --run-command "gunzip -c /boot/vmlinuz-6.6.0-72.0.0.76.oe2403sp1.aarch64 > /boot/vmlinuz-6.6.0-72.0.0.76.oe2403sp1.aarch64.uncompressed" \
-        --run-command '
-            sha_grub_cfg=$(sha256sum /boot/efi/EFI/openEuler/grub.cfg | awk "{print \$1}")
-            sha_initramfs=$(sha256sum /boot/initramfs-6.6.0-72.0.0.76.oe2403sp1.aarch64.img | awk "{print \$1}")
-            sha_kernel=$(sha256sum /boot/vmlinuz-6.6.0-72.0.0.76.oe2403sp1.aarch64.uncompressed | awk "{print \$1}")
-            printf "{\n    \"grub\": \"%s\",\n    \"grub.cfg\": \"%s\",\n    \"kernel\": \"%s\",\n    \"initramfs\": \"%s\",\n    \"hash_alg\": \"sha-256\"\n}" "$sha_grub_cfg" "$sha_grub_cfg" "$sha_kernel" "$sha_initramfs" > /root/hash.json
-        '
-    virt-cat -a ${TMP_GUEST_IMG_PATH} /root/hash.json > hash.json
-    jq --arg sha_grub "$sha_grub" '.["grub"] = $sha_grub' hash.json > temp.json && mv temp.json hash.json
+    [[ -f "${BOOT_EFI_PATH}" ]] || error "BOOTAA64.EFI not found"
+    sha_grub=$(./MeasurePe "${BOOT_EFI_PATH}" | awk -F"SHA-256 = " '{print $2}')
 
+    # measure grub.cfg
+    GRUB_CFG_PATH="${TMP_MOUNT_PATH}/boot/efi/EFI/openEuler/grub.cfg"
+    [[ -f "${GRUB_CFG_PATH}" ]] || error "grub.cfg not found"
+    sha_grub_cfg=$(sha256sum "${GRUB_CFG_PATH}" | awk '{print $1}')
+
+    mkdir -p "${TMP_MOUNT_PATH}/tmp/kernel_uncompressed"
+
+    # initialize json
+    JSON_TEMPLATE='{"grub": "%s", "grub.cfg": "%s", "kernels": [], "hash_alg": "sha-256"}'
+    printf "${JSON_TEMPLATE}" "${sha_grub}" "${sha_grub_cfg}" > image_reference_measurement.json
+
+    find "${TMP_MOUNT_PATH}/boot" -name 'vmlinuz-*' -not -name 'vmlinuz-*rescue*' | while read kernel_path; do
+        kernel_file=$(basename "${kernel_path}")
+        version="${kernel_file#vmlinuz-}"
+
+        # measure kernel
+        uncompressed_path="${TMP_MOUNT_PATH}/tmp/kernel_uncompressed/${kernel_file}"
+        gunzip -c "${kernel_path}" > "${uncompressed_path}" 2>/dev/null
+        if [ $? -ne 0 ]; then
+            warn "Failed to uncompress kernel: ${kernel_file}"
+            continue
+        fi
+        kernel_hash=$(sha256sum "${uncompressed_path}" | awk '{print $1}')
+        rm -f "${uncompressed_path}"
+
+        # measure initramfs
+        initramfs_path="${TMP_MOUNT_PATH}/boot/initramfs-${version}.img"
+        if [ -f "${initramfs_path}" ]; then
+            initramfs_hash=$(sha256sum "${initramfs_path}" | awk '{print $1}')
+        else
+            warn "Missing initramfs for kernel: ${version}"
+            initramfs_hash="NOT_FOUND"
+        fi
+
+        # update json
+        jq --arg version "${version}" \
+           --arg kernel "${kernel_hash}" \
+           --arg initramfs "${initramfs_hash}" \
+           '.kernels += [{
+               "version": $version,
+               "kernel": $kernel,
+               "initramfs": $initramfs
+           }]' \
+           image_reference_measurement.json > tmp.json && mv tmp.json image_reference_measurement.json
+    done
+
+    rm -rf "${TMP_MOUNT_PATH}/tmp/kernel_uncompressed"
+    guestunmount ${TMP_MOUNT_PATH}
 }
 
 cleanup() {
     if [[ -f ${SCRIPT_DIR}/"openEuler-${EULER_VERSION}-aarch64.qcow2.xz.sha256sum" ]]; then
         rm ${SCRIPT_DIR}/"openEuler-${EULER_VERSION}-aarch64.qcow2.xz.sha256sum"
     fi
-	
+
     if [[ -f ${SCRIPT_DIR}/"openEuler-${EULER_VERSION}-aarch64.qcow2.xz" ]]; then
         rm ${SCRIPT_DIR}/"openEuler-${EULER_VERSION}-aarch64.qcow2.xz"
-		rm ${SCRIPT_DIR}/"openEuler-${EULER_VERSION}-aarch64.qcow2"
+        rm ${SCRIPT_DIR}/"openEuler-${EULER_VERSION}-aarch64.qcow2"
     fi
     info "Cleanup!"
 }
 
-rm -f ${LOGFILE}
-echo "=== cvm guest image generation === " > ${LOGFILE}
+    process_args "$@"
 
-# install required tools
-yum install -y libguestfs-tools virt-install qemu-img genisoimage guestfs-tools cloud-utils-growpart jq &>> ${LOGFILE}
+if [ ${CREATE_IMAGE} == true ]; then
+    rm -f ${LOGFILE}
+    echo "=== cvm guest image generation === " > ${LOGFILE}
 
-check_tool qemu-img
-check_tool virt-customize
-check_tool virt-install
+    # install required tools
+    yum install -y libguestfs-tools virt-install qemu-img genisoimage guestfs-tools cloud-utils-growpart jq &>> ${LOGFILE}
 
+    check_tool qemu-img
+    check_tool virt-customize
+    check_tool virt-install
 
-info "Installation of required tools"
+    info "Installation of required tools"
 
-process_args "$@"
+    create_guest_image
 
-create_guest_image
+    setup_guest_image
 
-setup_guest_image
+    set_guest_password
+fi
 
-set_guest_password
-
-measure_guest_image
+if [[ ${MEASURE_IMAGE} == true ]]; then
+    measure_guest_image "${INPUT_IMAGE}"
+    ok "The measurement process is done"
+    if [ ${CREATE_IMAGE} == false ]; then
+        exit 0
+    fi
+fi
 
 cleanup
 
