@@ -63,7 +63,7 @@ sh create-fde-image.sh -i <input image> -g <image measurement reference> -o <out
     cd ${FDE_DIR}/attestation/${ATTEST_CASE}
     ./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f hash.json -k rootfs_key.bin 
     ```
-    >其中-m 为cVM基线度量值。
+    >其中`<measurement>`为cVM初始度量值的参考值，是由`gen_rim_ref`（详见 `virtCCA_sdk/attestion/rim_refi`） 工具生成。当`ATTEST_CASE=rats-tls`请输入 `-r <measurement>`。 
 4.  脚本`fde-agent.sh`会自动执行如下命令，使用加密密钥解密根文件系统并挂载。
     ```bash
     cryptsetup open /dev/vda2 encroot --key-file /root/rootfs_key.bin 
