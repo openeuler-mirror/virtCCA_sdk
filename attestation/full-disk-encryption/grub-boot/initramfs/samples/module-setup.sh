@@ -19,6 +19,6 @@ installkernel() {
 # called by dracut
 install() {
     inst_multiple /usr/sbin/cryptsetup 
-    inst /usr/lib/dracut/modules.d/98fde/server /usr/bin/server
+    inst "$moddir/virtcca-server" /usr/bin/virtcca-server
     inst_hook pre-mount 90 "$moddir/fde-agent.sh"
 }

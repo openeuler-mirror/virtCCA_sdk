@@ -4,13 +4,10 @@ set -e
 
 THIS_DIR=$(dirname "$(readlink -f "$0")")
 export FDE_DIR=${THIS_DIR}/../../../full-disk-encryption/grub-boot
-INITRD_DIR=${FDE_DIR}/initramfs
-ATTEST_DIR=${FDE_DIR}/attestation
 
 INPUT_IMG=${FDE_DIR}/openEuler-24.03-LTS-SP1-cvm-aarch64.qcow2
 OUTPUT_IMG=${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2
 INPUT_HASH=${FDE_DIR}/hash.json
-OUTPUT_HASH=${ATTEST_DIR}/hash.json
 
 DRACUT_DIR=/usr/lib/dracut/modules.d/98fde
 
@@ -46,24 +43,36 @@ check_dirs() {
     [[ $is_exist != true ]] || { error "Please delete existed directories"; }
 }
 
-# Display Usage information
+# Display usage information
 usage() {
     cat << EOM
 Usage: $(basename "$0") [OPTION]...
 Required
-  -i <guest image>              Specify initial guest image file
-  -g <reference measurements>   Specify reference measurements file of guest image
+  -i <input image>                        Specify initial CVM image file
+  -g <image measurement reference>        Specify measurement reference file of CVM image
+  -a <attestation case>                   Specify local verifier for attestation (samples or rats-tls) 
 Optional
-  -o <output image>             Default is virtcca-cvm-openeuler-24.03-encrypted.qcow2
+  -o <output image>                       Default is virtcca-cvm-openeuler-24.03-encrypted.qcow2
 EOM
 }
 
 process_args() {
-    while getopts "i:g:o:h" option; do
+    while getopts "i:g:a:o:h" option; do
         case "$option" in
-        i) INPUT_IMG=$OPTARG ;;
+        i) INPUT_IMG=$OPTARG;;
         g) INPUT_HASH=$OPTARG;;
-        o) OUTPUT_IMG=$OPTARG;;
+        a) ATTEST_CASE=$OPTARG;;
+        o)
+            file_name=$(basename $OPTARG)
+            if ! [[ -d $(dirname "$OPTARG") ]]; then
+                error "No such directory"
+            fi
+
+            if [[ "$file_name" != *.qcow2 ]]; then
+                error "Must be end with .qcow2"
+            fi
+            OUTPUT_IMG=$OPTARG
+            ;;
         h)
             usage
             exit 0
@@ -77,12 +86,20 @@ process_args() {
     done
 
     if [[ -z ${INPUT_IMG} ]]; then
-        error "Please specify the input guest image file via -i"
+        error "Please specify the input CVM image file via -i"
     else
         INPUT_IMG=$(readlink -f ${INPUT_IMG})
-        if [[ ! -f "${INPUT_IMG}" ]]; then
+        if [[ ! -f ${INPUT_IMG} ]]; then
             error "File not exist ${INPUT_IMG}"
         fi
+    fi
+
+    if [ ${ATTEST_CASE} = "samples" ] || [ ${ATTEST_CASE} = "rats-tls" ]; then
+        INITRD_DIR=${FDE_DIR}/initramfs/${ATTEST_CASE}
+        ATTEST_DIR=${FDE_DIR}/attestation/${ATTEST_CASE}
+        OUTPUT_HASH=${ATTEST_DIR}/hash.json
+    else
+        error "Please specify samples or rats-tls for attestation"
     fi
 
     ok "=================================================================="
@@ -90,6 +107,8 @@ process_args() {
     ok "Output image: ${OUTPUT_IMG}"
     ok "Input hash: ${INPUT_HASH}"
     ok "Output hash: ${OUTPUT_HASH}"
+    ok "Initramfs path: ${INITRD_DIR}"
+    ok "Attest path: ${ATTEST_DIR}"
     ok "=================================================================="
 
     # Create output image
@@ -99,28 +118,27 @@ process_args() {
     cp ${INPUT_HASH} ${OUTPUT_HASH}
 
     # Check and install packages needed
-    PACKAGES=""
+    HOST_PACKAGES=""
     if [[ -z "$(command -v qemu-img)" ]]; then
-        PACKAGES+="qemu-img "
+        HOST_PACKAGES+="qemu-img "
     fi
 
     if [[ -z "$(command -v virt-customize)" ]]; then
-        PACKAGES+="guestfs-tools "
+        HOST_PACKAGES+="guestfs-tools "
     fi
     
     if [[ -z "$(command -v openssl)" ]]; then
-        PACKAGES+="openssl "
+        HOST_PACKAGES+="openssl "
     fi
 
-    if [[ -n $PACKAGES ]]; then
-        dnf install -y "$PACKAGES"
+    if [[ -n ${HOST_PACKAGES} ]]; then
+        dnf install -y ${HOST_PACKAGES}
     fi
-    # check_tools qemu-img virt-customize openssl
 
     check_dirs /tmp/mnt/oldroot /tmp/mnt/backroot /tmp/mnt/newroot
 }
 
-# Create cmdline used for 
+# Create cmdline used for image update 
 cat > "${FDE_DIR}/cmdline.sh" << "EOF"
 #!/bin/bash
 
@@ -146,19 +164,31 @@ sha256sum ${GRUB_FILE} | awk "{print \$1}" > /root/grub_cfg_ref.txt
 
 EOF
 
-# install fde agent into the initramfs of the guest image
+# Install fde agent into the initramfs of the CVM image
 update_image() {
-    info "Run setup scripts inside the guest image. Please wait ..."
-    virt-customize -a ${OUTPUT_IMG} \
-        --mkdir ${DRACUT_DIR} \
-        --copy-in ${INITRD_DIR}/module-setup.sh:${DRACUT_DIR} \
-        --copy-in ${INITRD_DIR}/fde-agent.sh:${DRACUT_DIR} \
-        --copy-in ${ATTEST_DIR}/server:${DRACUT_DIR} \
-        --run ${FDE_DIR}/cmdline.sh 
-    if [ $? -eq 0 ]; then
-        ok "Run setup scripts inside the guest image"
+    info "Run setup scripts inside the CVM image. Please wait ..."
+    if [ ${ATTEST_CASE} = "samples" ]; then
+        # Install fde agent with samples into initramfs  
+        virt-customize -a ${OUTPUT_IMG} \
+            --mkdir ${DRACUT_DIR} \
+            --copy-in ${INITRD_DIR}/module-setup.sh:${DRACUT_DIR} \
+            --copy-in ${INITRD_DIR}/fde-agent.sh:${DRACUT_DIR} \
+            --copy-in ${ATTEST_DIR}/virtcca-server:${DRACUT_DIR} \
+            --run ${FDE_DIR}/cmdline.sh 
     else
-        error "Failed to setup guest image"
+        # Install fde agent with rats-tls into initramfs
+        virt-customize -a ${OUTPUT_IMG} \
+            --mkdir ${DRACUT_DIR} \
+            --copy-in ${INITRD_DIR}/module-setup.sh:${DRACUT_DIR} \
+            --copy-in ${INITRD_DIR}/fde-agent.sh:${DRACUT_DIR} \
+            --copy-in ${ATTEST_DIR}/virtcca-server:${DRACUT_DIR} \
+            --copy-in ${ATTEST_DIR}/lib:${DRACUT_DIR} \
+            --run ${FDE_DIR}/cmdline.sh 
+    fi
+    if [ $? -eq 0 ]; then
+        ok "Run setup scripts inside the CVM image"
+    else
+        error "Failed to setup CVM image"
     fi
     rm "${FDE_DIR}/cmdline.sh"
 }
@@ -181,13 +211,14 @@ mount_rootfs() {
         error "Failed to find free nbd device"
     fi
 
-    # Map guest image to network block device
+    # Map CVM image to network block device
     qemu-nbd --connect=${NBD_DEV} --format=qcow2 ${OUTPUT_IMG}
+    partprobe
     BOOT=${NBD_DEV}p1
     ROOT=${NBD_DEV}p2
     info "NBD_DEV:${NBD_DEV} ROOT:${ROOT} BOOT:${BOOT}"
 
-    # Mount guest image and update golden measurements
+    # Mount CVM image and update golden measurements
     mkdir -p /tmp/mnt/oldroot
     mount ${ROOT} /tmp/mnt/oldroot
     GOLDEN_INITRD_MEASURE=$(cat /tmp/mnt/oldroot/root/initramfs_ref.txt)
@@ -211,7 +242,7 @@ encryt_rootfs() {
     # Setup rootfs to LUKS with cipher aes-xts-plain64
     echo -n "YES" | cryptsetup luksFormat ${ROOT} --type luks2 \
         --cipher aes-xts-plain64 \
-        --key-file ${FDE_DIR}/attestation/rootfs_key.bin 
+        --key-file ${ATTEST_DIR}/rootfs_key.bin 
     # Open encrypted rootfs
     cryptsetup open ${ROOT} encroot --key-file ${ATTEST_DIR}/rootfs_key.bin
     ROOT_ENC=/dev/mapper/encroot
@@ -226,19 +257,28 @@ encryt_rootfs() {
     mount ${ROOT_ENC} /tmp/mnt/newroot 
     rsync -aAX /tmp/mnt/backroot/ /tmp/mnt/newroot/
     umount /tmp/mnt/newroot
+    ok "Now get the encrypted guest image for full disk encryption"
 }
 
 close_rootfs() {
-    cryptsetup close ${ROOT_ENC}
-    qemu-nbd --disconnect ${NBD_DEV}
-    if [[ ${NBD_DEV} == "/dev/nbd0" ]]; then
-        modprobe -r nbd
+    if ! [ -z ${ROOT_ENC} ]; then
+        cryptsetup close ${ROOT_ENC} || true
     fi
+    if ! [ -z ${NBD_DEV} ]; then
+        qemu-nbd --disconnect ${NBD_DEV} || true
+        if [[ ${NBD_DEV} == "/dev/nbd0" ]]; then
+            fuser -kvm $NBD_DEV || true
+            modprobe -r nbd ||true
+        fi
+    fi
+
     rm -rf /tmp/mnt/oldroot
     rm -rf /tmp/mnt/backroot
     rm -rf /tmp/mnt/newroot
-    ok "Now get the encrypted guest image for full disk encryption"
+    ok "Clean"
 }
+
+trap 'close_rootfs' EXIT
 
 process_args "$@"
 
@@ -252,5 +292,5 @@ ok "Encrypt Rootfs: =================================================="
 encryt_rootfs
 
 ok "Close Rootfs: ===================================================="
-close_rootfs
+
 
