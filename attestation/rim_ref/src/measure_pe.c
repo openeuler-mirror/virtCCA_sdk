@@ -12,25 +12,28 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
 #include <openssl/sha.h>
+#include <openssl/evp.h>
 
-/* EFI_STATUS */
+/* Enumeration of EFI_STATUS */
 #define EFI_SUCCESS 0
 #define EFI_UNSUPPORTED 2
 #define EFI_OUT_OF_RESOURCES 9
 
-/* EFI_ERROR */
 #define EFI_ERROR(x) ((x) != EFI_SUCCESS)
 
-typedef size_t UINTN;
+typedef size_t uintn_t;
 
+/* Define macros to build data structure signatures from characters. */
 #define SIGNATURE_16(A, B) (((A) | ((B) << 8)))
 #define SIGNATURE_32(A, B, C, D) (SIGNATURE_16(A, B) | (SIGNATURE_16(C, D) << 16))
 
 #define SHA256_DIGEST_SIZE 32
 #define MIN_ARGC 2
 
+/* EXE file formats */
 #define EFI_IMAGE_DOS_SIGNATURE SIGNATURE_16('M', 'Z')
 #define EFI_IMAGE_NT_SIGNATURE SIGNATURE_32('P', 'E', '\0', '\0')
 
@@ -38,11 +41,16 @@ typedef size_t UINTN;
 #define EFI_IMAGE_NUMBER_OF_DIRECTORY_ENTRIES 16
 #define EFI_IMAGE_DIRECTORY_ENTRY_SECURITY 4
 
+/* Header Data Directories. */
 typedef struct {
-    uint32_t VirtualAddress;
-    uint32_t Size;
-} EFI_IMAGE_DATA_DIRECTORY;
+    uint32_t virtual_address;
+    uint32_t size;
+} efi_image_data_directory;
 
+/*
+ * PE images can start with an optional DOS header, so if an image is run
+ * under DOS it can print an error message.
+ */
 typedef struct {
     uint16_t e_magic;
     uint16_t e_cblp;
@@ -63,188 +71,217 @@ typedef struct {
     uint16_t e_oeminfo;
     uint16_t e_res2[10];
     uint32_t e_lfanew;
-} EFI_IMAGE_DOS_HEADER;
+} efi_image_dos_header;
+
+/* COFF File Header (Object and Image). */
+typedef struct {
+    uint16_t machine;
+    uint16_t number_of_sections;
+    uint32_t time_date_stamp;
+    uint32_t pointer_to_symbol_table;
+    uint32_t number_of_symbols;
+    uint16_t size_of_optional_header;
+    uint16_t characteristics;
+} efi_image_file_header;
+
+/* Optional Header Standard Fields for PE32. */
+typedef struct {
+    /* Standard fields */
+    uint16_t magic;
+    uint8_t major_linker_version;
+    uint8_t minor_linker_version;
+    uint32_t size_of_code;
+    uint32_t size_of_initialized_data;
+    uint32_t size_of_uninitialized_data;
+    uint32_t address_of_entry_point;
+    uint32_t base_of_code;
+    uint32_t base_of_data;
+
+    /* Optional Header Windows-Specific Fields. */
+    uint32_t image_base;
+    uint32_t section_alignment;
+    uint32_t file_alignment;
+    uint16_t major_operating_system_version;
+    uint16_t minor_operating_system_version;
+    uint16_t major_image_version;
+    uint16_t minor_image_version;
+    uint16_t major_subsystem_version;
+    uint16_t minor_subsystem_version;
+    uint32_t win32_version_value;
+    uint32_t size_of_image;
+    uint32_t size_of_headers;
+    uint32_t checksum;
+    uint16_t subsystem;
+    uint16_t dll_characteristics;
+    uint32_t size_of_stack_reserve;
+    uint32_t size_of_stack_commit;
+    uint32_t size_of_heap_reserve;
+    uint32_t size_of_heap_commit;
+    uint32_t loader_flags;
+    uint32_t number_of_rva_and_sizes;
+    efi_image_data_directory data_directory[EFI_IMAGE_NUMBER_OF_DIRECTORY_ENTRIES];
+} efi_image_optional_header32;
+
+/* Optional Header Standard Fields for PE32+. */
+typedef struct {
+    /* Standard fields */
+    uint16_t magic;
+    uint8_t major_linker_version;
+    uint8_t minor_linker_version;
+    uint32_t size_of_code;
+    uint32_t size_of_initialized_data;
+    uint32_t size_of_uninitialized_data;
+    uint32_t address_of_entry_point;
+    uint32_t base_of_code;
+
+    /* Optional Header Windows-Specific Fields. */
+    uint64_t image_base;
+    uint32_t section_alignment;
+    uint32_t file_alignment;
+    uint16_t major_operating_system_version;
+    uint16_t minor_operating_system_version;
+    uint16_t major_image_version;
+    uint16_t minor_image_version;
+    uint16_t major_subsystem_version;
+    uint16_t minor_subsystem_version;
+    uint32_t win32_version_value;
+    uint32_t size_of_image;
+    uint32_t size_of_headers;
+    uint32_t checksum;
+    uint16_t subsystem;
+    uint16_t dll_characteristics;
+    uint64_t size_of_stack_reserve;
+    uint64_t size_of_stack_commit;
+    uint64_t size_of_heap_reserve;
+    uint64_t size_of_heap_commit;
+    uint32_t loader_flags;
+    uint32_t number_of_rva_and_sizes;
+    efi_image_data_directory data_directory[EFI_IMAGE_NUMBER_OF_DIRECTORY_ENTRIES];
+} efi_image_optional_header64;
 
 typedef struct {
-    uint16_t Machine;
-    uint16_t NumberOfSections;
-    uint32_t TimeDateStamp;
-    uint32_t PointerToSymbolTable;
-    uint32_t NumberOfSymbols;
-    uint16_t SizeOfOptionalHeader;
-    uint16_t Characteristics;
-} EFI_IMAGE_FILE_HEADER;
+    uint32_t signature;
+    efi_image_file_header file_header;
+    efi_image_optional_header32 optional_header;
+} efi_image_nt_headers32;
 
 typedef struct {
-    uint16_t Magic;
-    uint8_t MajorLinkerVersion;
-    uint8_t MinorLinkerVersion;
-    uint32_t SizeOfCode;
-    uint32_t SizeOfInitializedData;
-    uint32_t SizeOfUninitializedData;
-    uint32_t AddressOfEntryPoint;
-    uint32_t BaseOfCode;
-    uint32_t BaseOfData;
-
-    uint32_t ImageBase;
-    uint32_t SectionAlignment;
-    uint32_t FileAlignment;
-    uint16_t MajorOperatingSystemVersion;
-    uint16_t MinorOperatingSystemVersion;
-    uint16_t MajorImageVersion;
-    uint16_t MinorImageVersion;
-    uint16_t MajorSubsystemVersion;
-    uint16_t MinorSubsystemVersion;
-    uint32_t Win32VersionValue;
-    uint32_t SizeOfImage;
-    uint32_t SizeOfHeaders;
-    uint32_t CheckSum;
-    uint16_t Subsystem;
-    uint16_t DllCharacteristics;
-    uint32_t SizeOfStackReserve;
-    uint32_t SizeOfStackCommit;
-    uint32_t SizeOfHeapReserve;
-    uint32_t SizeOfHeapCommit;
-    uint32_t LoaderFlags;
-    uint32_t NumberOfRvaAndSizes;
-    EFI_IMAGE_DATA_DIRECTORY DataDirectory[EFI_IMAGE_NUMBER_OF_DIRECTORY_ENTRIES];
-} EFI_IMAGE_OPTIONAL_HEADER32;
-
-typedef struct {
-    uint16_t Magic;
-    uint8_t MajorLinkerVersion;
-    uint8_t MinorLinkerVersion;
-    uint32_t SizeOfCode;
-    uint32_t SizeOfInitializedData;
-    uint32_t SizeOfUninitializedData;
-    uint32_t AddressOfEntryPoint;
-    uint32_t BaseOfCode;
-
-    uint64_t ImageBase;
-    uint32_t SectionAlignment;
-    uint32_t FileAlignment;
-    uint16_t MajorOperatingSystemVersion;
-    uint16_t MinorOperatingSystemVersion;
-    uint16_t MajorImageVersion;
-    uint16_t MinorImageVersion;
-    uint16_t MajorSubsystemVersion;
-    uint16_t MinorSubsystemVersion;
-    uint32_t Win32VersionValue;
-    uint32_t SizeOfImage;
-    uint32_t SizeOfHeaders;
-    uint32_t CheckSum;
-    uint16_t Subsystem;
-    uint16_t DllCharacteristics;
-    uint64_t SizeOfStackReserve;
-    uint64_t SizeOfStackCommit;
-    uint64_t SizeOfHeapReserve;
-    uint64_t SizeOfHeapCommit;
-    uint32_t LoaderFlags;
-    uint32_t NumberOfRvaAndSizes;
-    EFI_IMAGE_DATA_DIRECTORY DataDirectory[EFI_IMAGE_NUMBER_OF_DIRECTORY_ENTRIES];
-} EFI_IMAGE_OPTIONAL_HEADER64;
-
-typedef struct {
-    uint32_t Signature;
-    EFI_IMAGE_FILE_HEADER FileHeader;
-    EFI_IMAGE_OPTIONAL_HEADER32 OptionalHeader;
-} EFI_IMAGE_NT_HEADERS32;
-
-typedef struct {
-    uint32_t Signature;
-    EFI_IMAGE_FILE_HEADER FileHeader;
-    EFI_IMAGE_OPTIONAL_HEADER64 OptionalHeader;
-} EFI_IMAGE_NT_HEADERS64;
+    uint32_t signature;
+    efi_image_file_header file_header;
+    efi_image_optional_header64 optional_header;
+} efi_image_nt_headers64;
 
 #define EFI_IMAGE_SIZEOF_SHORT_NAME 8
+
+/* Section Table. This table immediately follows the optional header. */
 typedef struct {
-    uint8_t Name[EFI_IMAGE_SIZEOF_SHORT_NAME];
+    uint8_t name[EFI_IMAGE_SIZEOF_SHORT_NAME];
     union {
-        uint32_t PhysicalAddress;
-        uint32_t VirtualSize;
-    } Misc;
-    uint32_t VirtualAddress;
-    uint32_t SizeOfRawData;
-    uint32_t PointerToRawData;
-    uint32_t PointerToRelocations;
-    uint32_t PointerToLinenumbers;
-    uint16_t NumberOfRelocations;
-    uint16_t NumberOfLinenumbers;
-    uint32_t Characteristics;
-} EFI_IMAGE_SECTION_HEADER;
+        uint32_t physical_address;
+        uint32_t virtual_size;
+    } misc;
+    uint32_t virtual_address;
+    uint32_t size_of_raw_data;
+    uint32_t pointer_to_raw_data;
+    uint32_t pointer_to_relocations;
+    uint32_t pointer_to_linenumbers;
+    uint16_t number_of_relocations;
+    uint16_t number_of_linenumbers;
+    uint32_t characteristics;
+} efi_image_section_header;
 
-typedef struct {
-    uint16_t Signature;
-    uint16_t Machine;
-    uint8_t NumberOfSections;
-    uint8_t Subsystem;
-    uint16_t StrippedSize;
-    uint32_t AddressOfEntryPoint;
-    uint32_t BaseOfCode;
-    uint64_t ImageBase;
-    EFI_IMAGE_DATA_DIRECTORY DataDirectory[2];
-} EFI_TE_IMAGE_HEADER;
+
+/* Union of PE32, PE32+ headers. */
+typedef union {
+    efi_image_nt_headers32 pe32;
+    efi_image_nt_headers64 pe32plus;
+} efi_image_optional_header_union;
 
 typedef union {
-    EFI_IMAGE_NT_HEADERS32 Pe32;
-    EFI_IMAGE_NT_HEADERS64 Pe32Plus;
-    EFI_TE_IMAGE_HEADER Te;
-} EFI_IMAGE_OPTIONAL_HEADER_UNION;
-
-typedef union {
-    EFI_IMAGE_NT_HEADERS32 *Pe32;
-    EFI_IMAGE_NT_HEADERS64 *Pe32Plus;
-    EFI_TE_IMAGE_HEADER *Te;
-    EFI_IMAGE_OPTIONAL_HEADER_UNION *Union;
-} EFI_IMAGE_OPTIONAL_HEADER_PTR_UNION;
+    efi_image_nt_headers32 *pe32;
+    efi_image_nt_headers64 *pe32plus;
+    efi_image_optional_header_union *union_hdr;
+} efi_image_optional_header_ptr_union;
 
 typedef struct {
-    unsigned char Sha256[32];
-} TPML_DIGEST_VALUES;
+    unsigned char sha256[32];
+} tpml_digest_values_t;
 
 typedef struct {
-    SHA256_CTX Sha256Ctx;
-} MY_HASH_CONTEXT;
+    EVP_MD_CTX *md_ctx;
+} my_hash_context_t;
 
-typedef MY_HASH_CONTEXT *HASH_HANDLE;
+typedef my_hash_context_t *hash_handle_t;
 
-static uint64_t HashStart(HASH_HANDLE *HashHandleOut)
+/* Start hash sequence. */
+static uint64_t hash_start(hash_handle_t *hash_handle_out)
 {
-    if (HashHandleOut == NULL) {
+    if (hash_handle_out == NULL) {
         return EFI_UNSUPPORTED;
     }
-    MY_HASH_CONTEXT *Context = (MY_HASH_CONTEXT *)malloc(sizeof(MY_HASH_CONTEXT));
-    if (Context == NULL) {
+
+    my_hash_context_t *context = (my_hash_context_t *)malloc(sizeof(my_hash_context_t));
+    if (context == NULL) {
         return EFI_OUT_OF_RESOURCES;
     }
-    SHA256_Init(&Context->Sha256Ctx);
-    *HashHandleOut = Context;
+
+    context->md_ctx = EVP_MD_CTX_new();
+    if (!context->md_ctx) {
+        free(context);
+        return EFI_OUT_OF_RESOURCES;
+    }
+
+    if (!EVP_DigestInit_ex(context->md_ctx, EVP_sha256(), NULL)) {
+        EVP_MD_CTX_free(context->md_ctx);
+        free(context);
+        return EFI_UNSUPPORTED;
+    }
+
+    *hash_handle_out = context;
     return EFI_SUCCESS;
 }
 
-static uint64_t HashUpdate(HASH_HANDLE HashHandle, const uint8_t *Data, size_t DataSize)
+/* Update hash sequence data. */
+static uint64_t hash_update(hash_handle_t hash_handle, const uint8_t *data, size_t data_size)
 {
-    if (HashHandle == NULL || Data == NULL) {
+    if (hash_handle == NULL || data == NULL) {
         return EFI_UNSUPPORTED;
     }
-    SHA256_Update(&HashHandle->Sha256Ctx, Data, DataSize);
+
+    if (!EVP_DigestUpdate(hash_handle->md_ctx, data, data_size)) {
+        return EFI_UNSUPPORTED;
+    }
+
     return EFI_SUCCESS;
 }
 
-static uint64_t HashCompleteAndExtend(HASH_HANDLE HashHandle,
-    uint32_t RtmrIndex,
-    const uint8_t *EventData,
-    size_t EventSize, TPML_DIGEST_VALUES *DigestList)
+/* Hash sequence complete and extend to PCR. */
+static uint64_t hash_complete_and_extend(hash_handle_t hash_handle, const uint8_t *event_data, size_t event_size,
+                                         tpml_digest_values_t *digest_list)
 {
-    if (HashHandle == NULL || DigestList == NULL) {
+    if (hash_handle == NULL || digest_list == NULL) {
         return EFI_UNSUPPORTED;
     }
-    unsigned char FinalDigest[SHA256_DIGEST_SIZE];
-    SHA256_Final(FinalDigest, &HashHandle->Sha256Ctx);
 
-    free(HashHandle);
+    unsigned char final_digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len;
 
-    memcpy(DigestList->Sha256, FinalDigest, SHA256_DIGEST_SIZE);
+    if (!EVP_DigestFinal_ex(hash_handle->md_ctx, final_digest, &digest_len)) {
+        EVP_MD_CTX_free(hash_handle->md_ctx);
+        free(hash_handle);
+        return EFI_UNSUPPORTED;
+    }
+
+    if (digest_len != SHA256_DIGEST_LENGTH) {
+        EVP_MD_CTX_free(hash_handle->md_ctx);
+        free(hash_handle);
+        return EFI_UNSUPPORTED;
+    }
+
+    memcpy(digest_list->sha256, final_digest, SHA256_DIGEST_LENGTH);
+
+    EVP_MD_CTX_free(hash_handle->md_ctx);
+    free(hash_handle);
 
     return EFI_SUCCESS;
 }
