@@ -131,14 +131,15 @@ build_rats_tls() {
     info "Build attestation rats-tls ..."
     cd ${ATTEST_SDK_DIR}/rats-tls
     if [ -d "rats-tls/.git" ]; then
-        info "rats-tls git repo already exists"
-    else
+        info "rats-tls git repo already exists. skip clone."
+        cd rats-tls
+    else 
         git clone https://github.com/inclavare-containers/rats-tls.git
+        cd rats-tls
+        git reset --hard 40f7b78403d75d13b1a372c769b2600f62b02692
+        git apply ../*.patch
     fi
-    cd rats-tls
-    git reset --hard 40f7b78403d75d13b1a372c769b2600f62b02692
-    git apply ../*.patch
-    bash build.sh -s -r
+    bash build.sh -s -r -c -v gcc || error "compiles rats-tls error, please check rats-tls"
     # Copy rats-tls to ${ATTEST_DIR} and install envs
     cd ${ATTEST_DIR}
     cp ${ATTEST_SDK_DIR}/rats-tls/rats-tls/bin/rats-tls.tar.gz ${ATTEST_DIR}
@@ -174,19 +175,15 @@ process_args "$@"
 
 ok "Prepare attestation envs, include apps, certs ..."
 
-if [[ ! -f ${ATTEST_CLIENT} || ! -f ${ATTEST_SERVER} ]] ; then
-    info "Attestation apps do not exist, re-build ..."
-    build_sdk
-    if [ ${ATTEST_CASE} = "samples" ]; then
-        build_samples
-    else
-        if [ ! -f /usr/local/lib64/libcbor.a ]; then
-            build_libcbor
-        fi
-        build_rats_tls
-    fi
+info "Attestation apps re-build ..."
+build_sdk
+if [ ${ATTEST_CASE} = "samples" ]; then
+    build_samples
 else
-    warn "Attestation apps already exist, if re-build please delete existing apps"
+    if [ ! -f /usr/local/lib64/libcbor.a ]; then
+        build_libcbor
+    fi
+    build_rats_tls
 fi
 
 download_certfile
