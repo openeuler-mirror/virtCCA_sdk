@@ -18,7 +18,8 @@ enum MSG_ID {
     CCEL_EVENT_LOG_ID,
     VERIFY_SUCCESS_MSG_ID,
     VERIFY_FAILED_MSG_ID,
-    VERIFY_REM_MSG_ID
+    VERIFY_REM_MSG_ID,
+    USE_FDE_MSG_ID
 };
 
 typedef struct {

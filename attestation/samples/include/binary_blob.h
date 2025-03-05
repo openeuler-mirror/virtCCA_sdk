@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
+#include "utils.h"
 
 #define BYTES_PER_LINE 16
 
@@ -22,8 +23,7 @@ uint64_t binary_blob_get_uint64(const binary_blob_t* blob, size_t* pos);
 void binary_blob_get_bytes(const binary_blob_t* blob, size_t* pos, size_t count, uint8_t* out);
 void binary_blob_dump(const binary_blob_t* blob);
 
-/* File reading utility functions */
-uint8_t* read_file_data(const char* filename, size_t* out_size);
-char* read_text_file(const char* filename, size_t* out_size);
+/* Legacy file reading function that forwards to utils.h */
+uint8_t* read_binary_file(const char* filename, size_t* out_size);
 
 #endif /* BINARY_BLOB_H */

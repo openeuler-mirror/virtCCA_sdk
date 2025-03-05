@@ -3,6 +3,7 @@
 #include <netinet/in.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
@@ -10,40 +11,15 @@
 #include <getopt.h>
 #include "attestation.h"
 #include "common.h"
+#include "utils.h"
 
 #define CCEL_ACPI_TABLE_PATH "/sys/firmware/acpi/tables/CCEL"
 #define CCEL_EVENT_LOG_PATH "/sys/firmware/acpi/tables/data/CCEL"
+#define KEY_FILE_PATH "/root/rootfs_key.bin"
+#define MAX 4096
+#define PORT 7220
 
-int read_file_data(const char *file_name, unsigned char **file_data, size_t *file_size)
-{
-    FILE *file = fopen(file_name, "rb");
-    if (file == NULL) {
-        printf("Failed to open file %s.\n", file_name);
-        return 1;
-    }
-
-    fseek(file, 0, SEEK_END);
-    *file_size = ftell(file);
-    fseek(file, 0, SEEK_SET);
-
-    *file_data = (char *)malloc(*file_size + 1);
-    if (file_data == NULL) {
-        printf("Failed to allocate memory.\n");
-        fclose(file);
-        return 1;
-    }
-
-    size_t byte_read = fread(*file_data, 1, *file_size, file);
-    if (byte_read != *file_size) {
-        printf("Failed to read opened file.\n");
-        free(*file_data);
-        fclose(file);
-        return 1;
-    }
-
-    fclose(file);
-    return 0;
-}
+bool use_fde = false;
 
 int handle_connect(int connfd, tsi_ctx *ctx)
 {
@@ -132,6 +108,29 @@ int handle_connect(int connfd, tsi_ctx *ctx)
         } else if (msg_id == VERIFY_SUCCESS_MSG_ID) {
             printf("Succeed to verify!\n");
             ret = VERIFY_SUCCESS;
+            
+            /* Receive FDE usage information */
+            if (read(connfd, &msg_id, sizeof(msg_id)) != sizeof(msg_id)) {
+                printf("Failed to receive FDE usage info.\n");
+                return VERIFY_FAILED;
+            }
+            
+            use_fde = (msg_id == USE_FDE_MSG_ID);
+            if (use_fde) {
+                printf("Client indicated FDE is enabled, receiving key file...\n");
+                unsigned char key_file[MAX] = {};
+                size_t key_file_len = 0;
+                key_file_len = read(connfd, key_file, sizeof(key_file));
+                if (key_file_len <= 0) {
+                    printf("Failed to receive key file data.\n");
+                    return VERIFY_FAILED;
+                }
+                ret = save_file_data(KEY_FILE_PATH, key_file, key_file_len);
+                if (ret != 0) {
+                    printf("Failed to save key file data.\n");
+                    return VERIFY_FAILED;
+                }
+            }
             break;
         } else if (msg_id == VERIFY_FAILED_MSG_ID) {
             printf("Failed to verify!\n");

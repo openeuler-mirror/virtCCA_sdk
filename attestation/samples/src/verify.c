@@ -3,33 +3,25 @@
 #include <string.h>
 #include "config.h"
 #include "binary_blob.h"
-#include "vcca_event_log.h"
-#include "vcca_firmware_state.h"
+#include "event_log.h"
+#include "firmware_state.h"
 #include "verify.h"
 
 /* Length of REM value read from rem.txt file (each value is 32 bytes, represented as 64 hex characters) */
 #define REM_HEX_LENGTH 64
 #define HASH_STR_LENGTH 64
 
-/* JSON parsing state */
-typedef struct {
-    char* grub;
-    char* grub_cfg;
-    char* kernel;
-    char* initramfs;
-    char* hash_alg;
-} firmware_reference_t;
 
-/* Forward declarations of all static functions */
-static bool hex_to_bytes(const char* hex_str, uint8_t* bytes, size_t length);
-static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
-static bool parse_json_file(const char* filename, firmware_reference_t* ref);
-static void free_firmware_reference(firmware_reference_t* ref);
-static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
+/* Forward declarations of all functions */
+static bool hex_string_to_bytes(const char* hex_str, uint8_t* bytes, size_t length);
+void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
+bool parse_json_file(const char* filename, firmware_reference_t* ref);
+void free_firmware_reference(firmware_reference_t* ref);
+bool compare_and_print_hash(const char* component_name, const char* ref_hash,
                                      const uint8_t* actual_hash, size_t hash_size);
 static char* extract_json_string(const char* json, const char* key);
 
-static bool hex_to_bytes(const char* hex_str, uint8_t* bytes, size_t length)
+static bool hex_string_to_bytes(const char* hex_str, uint8_t* bytes, size_t length)
 {
     if (!hex_str || !bytes || strlen(hex_str) != length * 2) {
         return false;
@@ -81,7 +73,7 @@ bool read_token_rem(rem_t rems[REM_COUNT])
                 }
 
                 /* Convert hex string to byte array */
-                if (!hex_to_bytes(pos, rems[rem_index].data, REM_LENGTH_BYTES)) {
+                if (!hex_string_to_bytes(pos, rems[rem_index].data, REM_LENGTH_BYTES)) {
                     printf("Error: Failed to parse REM[%d] value\n", rem_index);
                     goto cleanup;
                 }
@@ -119,7 +111,7 @@ void verify_single_rem(int rem_index, const rem_t* rem1, const rem_t* rem2)
     }
 }
 
-bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_t* state)
+bool verify_firmware_state(const char* json_file, const firmware_log_state_t* state)
 {
     if (!json_file || !state) {
         return false;
@@ -167,21 +159,51 @@ bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_
         }
     }
 
-    /* Verify kernel and initramfs */
+    /* Verify kernel and initramfs - match any kernel version */
     if (state->linux_kernel) {
-        if (state->linux_kernel->kernel_hash) {
-            if (!compare_and_print_hash("Kernel", ref.kernel,
-                state->linux_kernel->kernel_hash,
-                state->linux_kernel->kernel_hash_size)) {
-                goto cleanup;
+        bool kernel_match = false;
+        
+        /* Try to match against any kernel version in the reference */
+        for (int i = 0; i < ref.kernel_count; i++) {
+            bool version_match = true;
+            
+            /* Check kernel hash if available */
+            if (state->linux_kernel->kernel_hash) {
+                if (!ref.kernels[i].kernel) {
+                    printf("FAILED: Kernel hash exists but reference is missing\n");
+                    version_match = false;
+                } else if (!compare_and_print_hash("Kernel", ref.kernels[i].kernel,
+                    state->linux_kernel->kernel_hash,
+                    state->linux_kernel->kernel_hash_size)) {
+                    version_match = false;
+                }
+            }
+            
+            /* Check initramfs hash if available */
+            if (version_match && state->linux_kernel->initrd_hash) {
+                if (!ref.kernels[i].initramfs) {
+                    printf("FAILED: Initramfs hash exists but reference is missing\n");
+                    version_match = false;
+                } else if (!compare_and_print_hash("Initramfs", ref.kernels[i].initramfs,
+                    state->linux_kernel->initrd_hash,
+                    state->linux_kernel->initrd_hash_size)) {
+                    version_match = false;
+                }
+            }
+            
+            /* If this version matches, we're done */
+            if (version_match) {
+                if (ref.kernels[i].version) {
+                    printf("Matched kernel version: %s\n", ref.kernels[i].version);
+                }
+                kernel_match = true;
+                break;
             }
         }
-        if (state->linux_kernel->initrd_hash) {
-            if (!compare_and_print_hash("Initramfs", ref.initramfs,
-                state->linux_kernel->initrd_hash,
-                state->linux_kernel->initrd_hash_size)) {
-                goto cleanup;
-            }
+        
+        /* If no kernel matched, verification fails */
+        if (!kernel_match) {
+            goto cleanup;
         }
     }
 
@@ -193,94 +215,8 @@ cleanup:
     return result;
 }
 
-bool verify_rem(void)
-{
-    printf("=> Verify REM\n");
-    /* 1. Read CCEL file */
-    size_t file_size;
-    uint8_t* ccel_data = read_file_data(g_config.ccel_file, &file_size);
-    if (!ccel_data) {
-        return false;
-    }
-
-    /* 2. Get the start address and length of event log area from CCEL */
-    /* The processing is simplified here. The CCEL structure should be parsed. */
-    size_t log_area_start = 0;  /* Actually read from CCEL */
-    size_t log_area_length = 0;
-
-    /* 3. Initialize event log processor */
-    vcca_event_log_t event_log;
-    if (!vcca_event_log_init(&event_log, log_area_start, log_area_length)) {
-        free(ccel_data);
-        return false;
-    }
-
-    /* 4. Replay event log to calculate REM values */
-    if (!vcca_event_log_replay(&event_log)) {
-        free(ccel_data);
-        return false;
-    }
-
-    /* 5. Read REM values from attestation token */
-    rem_t token_rems[REM_COUNT];
-    if (!read_token_rem(token_rems)) {
-        printf("Error: Could not read REM file: %s\n", g_config.rem_file);
-        free(ccel_data);
-        return false;
-    }
-
-    /* 6. Verify each REM value */
-    printf("\nVerifying REM values...\n");
-    bool all_rems_passed = true;
-    for (int i = 0; i < REM_COUNT; i++) {
-        verify_single_rem(i, &token_rems[i], &event_log.rems[i]);
-        if (!rem_compare(&token_rems[i], &event_log.rems[i])) {
-            all_rems_passed = false;
-        }
-    }
-
-    if (!all_rems_passed) {
-        printf("\nREM verification failed, skipping firmware state verification\n");
-        free(ccel_data);
-        return false;
-    }
-
-    printf("\nAll REM values verified successfully\n");
-
-    /* 7. If JSON file is provided and REM verification passed, verify firmware state */
-    bool final_result = true;
-    if (g_config.json_file) {
-        printf("\nVerifying firmware state...\n");
-        vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
-        if (!state) {
-            printf("Error: Failed to create firmware state\n");
-            free(ccel_data);
-            return false;
-        }
-
-        if (!vcca_firmware_log_state_extract(&event_log, state)) {
-            printf("Error: Failed to extract firmware state\n");
-            vcca_firmware_log_state_free(state);
-            free(ccel_data);
-            return false;
-        }
-
-        if (!verify_firmware_state(g_config.json_file, state)) {
-            printf("Error: Firmware state verification failed\n");
-            vcca_firmware_log_state_free(state);
-            free(ccel_data);
-            final_result = false;
-        }
-
-        vcca_firmware_log_state_free(state);
-    }
-
-    free(ccel_data);
-    return final_result;
-}
-
 /* Helper function: Convert byte array to hex string */
-static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
+void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
 {
     for (size_t i = 0; i < len; i++) {
         sprintf(hex_str + (i * 2), "%02x", bytes[i]);
@@ -314,7 +250,7 @@ static char* extract_json_string(const char* json, const char* key)
 }
 
 /* Helper function: Parse JSON file */
-static bool parse_json_file(const char* filename, firmware_reference_t* ref)
+bool parse_json_file(const char* filename, firmware_reference_t* ref)
 {
     if (!filename || !ref) {
         return false;
@@ -326,31 +262,110 @@ static bool parse_json_file(const char* filename, firmware_reference_t* ref)
         return false;
     }
 
+    /* Initialize kernels array */
+    ref->kernels = NULL;
+    ref->kernel_count = 0;
+
     ref->grub = extract_json_string(json_content, "grub");
     ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
-    ref->kernel = extract_json_string(json_content, "kernel");
-    ref->initramfs = extract_json_string(json_content, "initramfs");
     ref->hash_alg = extract_json_string(json_content, "hash_alg");
+    
+    /* Parse kernels array */
+    char* kernels_start = strstr(json_content, "\"kernels\":");
+    if (kernels_start) {
+        kernels_start = strchr(kernels_start, '[');
+        if (kernels_start) {
+            char* kernels_end = strchr(kernels_start, ']');
+            if (kernels_end) {
+                /* Count number of kernel objects */
+                char* ptr = kernels_start;
+                while (ptr < kernels_end) {
+                    if (*ptr == '{') {
+                        ref->kernel_count++;
+                    }
+                    ptr++;
+                }
+                
+                if (ref->kernel_count > 0) {
+                    /* Allocate memory for kernel objects */
+                    ref->kernels = (kernel_version_t*)calloc(ref->kernel_count, sizeof(kernel_version_t));
+                    if (!ref->kernels) {
+                        goto error;
+                    }
+                    
+                    /* Extract each kernel object */
+                    int idx = 0;
+                    ptr = kernels_start;
+                    while (ptr < kernels_end && idx < ref->kernel_count) {
+                        ptr = strchr(ptr, '{');
 
+                        if (!ptr || ptr >= kernels_end) {
+                            break;
+                        }
+                        
+                        char* obj_end = strchr(ptr, '}');
+                        if (!obj_end || obj_end >= kernels_end) {
+                            break;
+                        }
+                        
+                        /* Extract temporary JSON object */
+                        size_t obj_len = obj_end - ptr + 1;
+                        char* obj_json = (char*)malloc(obj_len + 1);
+                        if (!obj_json) {
+                            break;
+                        }
+                        
+                        strncpy(obj_json, ptr, obj_len);
+                        obj_json[obj_len] = '\0';
+                        
+                        /* Parse kernel version object */
+                        ref->kernels[idx].version = extract_json_string(obj_json, "version");
+                        ref->kernels[idx].kernel = extract_json_string(obj_json, "kernel");
+                        ref->kernels[idx].initramfs = extract_json_string(obj_json, "initramfs");
+                        
+                        free(obj_json);
+                        idx++;
+                        ptr = obj_end + 1;
+                    }
+                }
+            }
+        }
+    }
+    
     free(json_content);
-    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
+    return (ref->grub && ref->grub_cfg && ref->hash_alg && ref->kernel_count > 0);
+
+error:
+    free(json_content);
+    free_firmware_reference(ref);
+    return false;
 }
 
 /* Helper function: Free JSON parsing results */
-static void free_firmware_reference(firmware_reference_t* ref)
+void free_firmware_reference(firmware_reference_t* ref)
 {
     if (!ref) {
         return;
     }
     free(ref->grub);
     free(ref->grub_cfg);
-    free(ref->kernel);
-    free(ref->initramfs);
     free(ref->hash_alg);
+    
+    /* Free kernel version data */
+    if (ref->kernels) {
+        for (int i = 0; i < ref->kernel_count; i++) {
+            free(ref->kernels[i].version);
+            free(ref->kernels[i].kernel);
+            free(ref->kernels[i].initramfs);
+        }
+        free(ref->kernels);
+        ref->kernels = NULL;
+    }
+    ref->kernel_count = 0;
 }
 
 /* Helper function: Compare hash value and print result */
-static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
+bool compare_and_print_hash(const char* component_name, const char* ref_hash,
                                       const uint8_t* actual_hash, size_t hash_size)
 {
     if (!ref_hash || !actual_hash) {

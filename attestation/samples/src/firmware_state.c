@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "vcca_event_log.h"
-#include "vcca_firmware_state.h"
+#include "event_log.h"
+#include "firmware_state.h"
 
 /* Helper function: Extract EFI image information from event data */
-static bool extract_efi_image(vcca_event_log_entry_t* entry, vcca_efi_image_t* image)
+static bool extract_efi_image(event_log_entry_t* entry, efi_image_t* image)
 {
     if (!entry || !image || !entry->digests || entry->digest_count == 0) {
         return false;
@@ -22,7 +22,7 @@ static bool extract_efi_image(vcca_event_log_entry_t* entry, vcca_efi_image_t* i
 }
 
 /* Helper function: Extract GRUB information from event data */
-static bool extract_grub_info(vcca_event_log_entry_t* entry, vcca_grub_state_t* grub)
+static bool extract_grub_info(event_log_entry_t* entry, grub_state_t* grub)
 {
     if (!entry || !grub || !entry->event || entry->event_size == 0) {
         return false;
@@ -80,7 +80,7 @@ static const uint8_t* find_substring(const uint8_t* data, size_t data_len, const
 }
 
 /* Print firmware state information */
-void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state)
+void firmware_log_state_print(const firmware_log_state_t* state)
 {
     if (!state) {
         printf("Firmware state is empty\n");
@@ -133,19 +133,19 @@ void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state)
 }
 
 /* Create firmware log state */
-vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log)
+firmware_log_state_t* firmware_log_state_create(event_log_t* log)
 {
-    vcca_firmware_log_state_t* state = (vcca_firmware_log_state_t*)calloc(1, sizeof(vcca_firmware_log_state_t));
+    firmware_log_state_t* state = (firmware_log_state_t*)calloc(1, sizeof(firmware_log_state_t));
     if (!state) {
         return NULL;
     }
 
-    state->efi = (vcca_efi_state_t*)calloc(1, sizeof(vcca_efi_state_t));
-    state->grub = (vcca_grub_state_t*)calloc(1, sizeof(vcca_grub_state_t));
-    state->linux_kernel = (vcca_linux_kernel_state_t*)calloc(1, sizeof(vcca_linux_kernel_state_t));
+    state->efi = (efi_state_t*)calloc(1, sizeof(efi_state_t));
+    state->grub = (grub_state_t*)calloc(1, sizeof(grub_state_t));
+    state->linux_kernel = (linux_kernel_state_t*)calloc(1, sizeof(linux_kernel_state_t));
 
     if (!state->efi || !state->grub || !state->linux_kernel) {
-        vcca_firmware_log_state_free(state);
+        firmware_log_state_free(state);
         return NULL;
     }
 
@@ -153,7 +153,7 @@ vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log)
 }
 
 /* Free firmware log state */
-void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state)
+void firmware_log_state_free(firmware_log_state_t* state)
 {
     if (!state) {
         return;
@@ -183,14 +183,14 @@ void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state)
 }
 
 /* Extract firmware log state */
-bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_state_t* state)
+bool firmware_log_state_extract(event_log_t* log, firmware_log_state_t* state)
 {
     if (!log || !state) {
         return false;
     }
 
     size_t pos = 0;
-    vcca_event_log_entry_t entry;
+    event_log_entry_t entry;
     uint32_t efi_image_count = 0;
     bool has_grub_info = false;
     bool has_kernel_info = false;
@@ -205,7 +205,7 @@ bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_st
 
     /* Allocate EFI image array */
     if (efi_image_count > 0) {
-        state->efi->images = (vcca_efi_image_t*)calloc(efi_image_count, sizeof(vcca_efi_image_t));
+        state->efi->images = (efi_image_t*)calloc(efi_image_count, sizeof(efi_image_t));
         if (!state->efi->images) {
             return false;
         }
@@ -239,7 +239,7 @@ bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_st
                         state->linux_kernel->kernel_hash = (uint8_t*)malloc(state->linux_kernel->kernel_hash_size);
                         if (state->linux_kernel->kernel_hash) {
                             memcpy(state->linux_kernel->kernel_hash, entry.digests,
-                                      state->linux_kernel->kernel_hash_size);
+                                   state->linux_kernel->kernel_hash_size);
                             has_kernel_info = true;
                         }
                     }
@@ -254,7 +254,7 @@ bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_st
                         state->linux_kernel->initrd_hash = (uint8_t*)malloc(state->linux_kernel->initrd_hash_size);
                         if (state->linux_kernel->initrd_hash) {
                             memcpy(state->linux_kernel->initrd_hash, entry.digests,
-                                      state->linux_kernel->initrd_hash_size);
+                                   state->linux_kernel->initrd_hash_size);
                             has_initrd_info = true;
                         }
                     }

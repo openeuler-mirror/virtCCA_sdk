@@ -12,13 +12,16 @@ include_directories(
 
 set(COMMON_SOURCES
     src/binary_blob.c
-    src/vcca_event_log.c
-    src/vcca_firmware_state.c
+    src/event_log.c
+    src/firmware_state.c
     src/verify.c
     src/rem.c
 )
 
-add_executable(server src/server.c)
+add_executable(server 
+    src/server.c
+    src/utils.c
+)
 target_link_libraries(server vccaattestation)
 
 add_executable(client 

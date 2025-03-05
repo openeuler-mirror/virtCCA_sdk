@@ -16,8 +16,8 @@
 #include "token_validate.h"
 #include "utils.h"
 #include "common.h"
-#include "vcca_event_log.h"
-#include "vcca_firmware_state.h"
+#include "event_log.h"
+#include "firmware_state.h"
 #include "binary_blob.h"
 #include "verify.h"
 #include "config.h"
@@ -44,34 +44,8 @@ size_t measurement_len = MAX_MEASUREMENT_SIZE;
 bool use_firmware = false;
 bool dump_eventlog = false;
 char* ref_json_file = NULL;
-
-/* JSON parsing state */
-typedef struct {
-    char* grub;
-    char* grub_cfg;
-    char* kernel;
-    char* initramfs;
-    char* hash_alg;
-} firmware_reference_t;
-
-/* ACPI table parsing structure */
-typedef struct {
-    uint8_t revision;
-    uint8_t checksum;
-    char oem_id[6];
-    uint8_t cc_type;
-    uint8_t cc_subtype;
-    uint64_t log_length;
-    uint64_t log_address;
-} acpi_table_info_t;
-
-/* Helper function: Convert byte array to hex string */
-static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
-{
-    for (size_t i = 0; i < len; i++) {
-        sprintf(hex_str + (i * 2), "%02x", bytes[i]);
-    }
-}
+bool use_fde = false;
+char* rootfs_key_file = NULL;
 
 /* Helper function: Extract string value from JSON */
 static char* extract_json_string(const char* json, const char* key)
@@ -97,128 +71,6 @@ static char* extract_json_string(const char* json, const char* key)
         }
     }
     return value;
-}
-
-/* Helper function: Parse JSON file */
-static bool parse_json_file(const char* filename, firmware_reference_t* ref)
-{
-    if (!filename || !ref) {
-        return false;
-    }
-
-    size_t file_size;
-    char* json_content = read_text_file(filename, &file_size);
-    if (!json_content) {
-        return false;
-    }
-
-    ref->grub = extract_json_string(json_content, "grub");
-    ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
-    ref->kernel = extract_json_string(json_content, "kernel");
-    ref->initramfs = extract_json_string(json_content, "initramfs");
-    ref->hash_alg = extract_json_string(json_content, "hash_alg");
-
-    free(json_content);
-    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
-}
-
-/* Helper function: Free JSON parsing results */
-static void free_firmware_reference(firmware_reference_t* ref)
-{
-    if (!ref) {
-        return;
-    }
-    free(ref->grub);
-    free(ref->grub_cfg);
-    free(ref->kernel);
-    free(ref->initramfs);
-    free(ref->hash_alg);
-}
-
-/* Helper function: Compare hash value and print result */
-static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
-                                      const uint8_t* actual_hash, size_t hash_size)
-{
-    if (!ref_hash || !actual_hash) {
-        return false;
-    }
-    
-    char actual_hex[HASH_STR_LENGTH + 1] = {0};
-    bytes_to_hex_string(actual_hash, hash_size, actual_hex);
-    
-    bool match = (strncmp(ref_hash, actual_hex, HASH_STR_LENGTH) == 0);
-    printf("\n%s verification %s\n", component_name, match ? "passed" : "failed");
-    printf("Expected: %s\n", ref_hash);
-    printf("Got:      %s\n", actual_hex);
-    return match;
-}
-
-static bool verify_firmware_state_local(const char* json_file, const vcca_firmware_log_state_t* state)
-{
-    if (!json_file || !state) {
-        return false;
-    }
-
-    firmware_reference_t ref = {0};
-    bool result = false;
-
-    /* Parse JSON file */
-    if (!parse_json_file(json_file, &ref)) {
-        printf("Error: Failed to parse JSON file\n");
-        return false;
-    }
-
-    printf("\nVerifying firmware components...\n");
-
-    /* Verify EFI state (grub) */
-    if (state->efi && state->efi->image_count > 0) {
-        bool found_match = false;
-        for (uint32_t i = 0; i < state->efi->image_count; i++) {
-            if (compare_and_print_hash("GRUB", ref.grub,
-                state->efi->images[i].image_hash,
-                state->efi->images[i].image_hash_size)) {
-                found_match = true;
-                break;
-            }
-        }
-        if (!found_match) {
-            goto cleanup;
-        }
-    }
-
-    /* Verify GRUB configuration */
-    if (state->grub && state->grub->config_hash) {
-        if (!compare_and_print_hash("GRUB config", ref.grub_cfg,
-            state->grub->config_hash,
-            state->grub->config_hash_size)) {
-            goto cleanup;
-        }
-    }
-
-    /* Verify kernel and initramfs */
-    if (state->linux_kernel) {
-        if (state->linux_kernel->kernel_hash) {
-            if (!compare_and_print_hash("Kernel", ref.kernel,
-                state->linux_kernel->kernel_hash,
-                state->linux_kernel->kernel_hash_size)) {
-                goto cleanup;
-            }
-        }
-        if (state->linux_kernel->initrd_hash) {
-            if (!compare_and_print_hash("Initramfs", ref.initramfs,
-                state->linux_kernel->initrd_hash,
-                state->linux_kernel->initrd_hash_size)) {
-                goto cleanup;
-            }
-        }
-    }
-
-    printf("\nAll firmware components verification passed\n");
-    result = true;
-
-cleanup:
-    free_firmware_reference(&ref);
-    return result;
 }
 
 int verify_token(unsigned char *token, size_t token_len)
@@ -263,14 +115,14 @@ int verify_token(unsigned char *token, size_t token_len)
 
     if (use_firmware) {
         /* Initialize event log processor */
-        vcca_event_log_t event_log;
-        if (!vcca_event_log_init(&event_log, 0, 0)) {
+        event_log_t event_log;
+        if (!event_log_init(&event_log, 0, 0)) {
             printf("Error: Failed to initialize event log\n");
             return VERIFY_FAILED;
         }
 
         /* Replay event log to calculate REM values */
-        if (!vcca_event_log_replay(&event_log)) {
+        if (!event_log_replay(&event_log)) {
             printf("Error: Failed to replay event log\n");
             return VERIFY_FAILED;
         }
@@ -299,25 +151,25 @@ int verify_token(unsigned char *token, size_t token_len)
         /* If JSON file is provided, verify firmware state */
         if (ref_json_file) {
             printf("\nVerifying firmware state...\n");
-            vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
+            firmware_log_state_t* state = firmware_log_state_create(&event_log);
             if (!state) {
                 printf("Error: Failed to create firmware state\n");
                 return VERIFY_FAILED;
             }
 
-            if (!vcca_firmware_log_state_extract(&event_log, state)) {
+            if (!firmware_log_state_extract(&event_log, state)) {
                 printf("Error: Failed to extract firmware state\n");
-                vcca_firmware_log_state_free(state);
+                firmware_log_state_free(state);
                 return VERIFY_FAILED;
             }
 
-            if (!verify_firmware_state_local(ref_json_file, state)) {
+            if (!verify_firmware_state(ref_json_file, state)) {
                 printf("Error: Firmware state verification failed\n");
-                vcca_firmware_log_state_free(state);
+                firmware_log_state_free(state);
                 return VERIFY_FAILED;
             }
 
-            vcca_firmware_log_state_free(state);
+            firmware_log_state_free(state);
         }
     }
 
@@ -342,25 +194,6 @@ int save_dev_cert(const char *prefix, const char * filename, const char *dev_cer
 
     X509_free(aik);
     fclose(fp);
-    return 0;
-}
-
-int save_file_data(const char *file_name, unsigned char *file_data, size_t file_size)
-{
-    FILE *file = fopen(file_name, "wb");
-    if (file == NULL) {
-        printf("Failed to open file %s\n", file_name);
-        return 1;
-    }
-
-    size_t byte_write = fwrite(file_data, 1, file_size, file);
-    if (byte_write != file_size) {
-        printf("Failed to write opened file");
-        fclose(file);
-        return 1;
-    }
-
-    fclose(file);
     return 0;
 }
 
@@ -439,7 +272,7 @@ static bool parse_acpi_table(const uint8_t* ccel_data, size_t file_size, acpi_ta
 static int handle_eventlogs_command(void)
 {
     size_t file_size;
-    uint8_t* ccel_data = read_file_data(g_config.ccel_file, &file_size);
+    uint8_t* ccel_data = read_binary_file(g_config.ccel_file, &file_size);
     if (!ccel_data) {
         return 1;
     }
@@ -450,14 +283,14 @@ static int handle_eventlogs_command(void)
         return 1;
     }
 
-    vcca_event_log_t event_log;
-    if (!vcca_event_log_init(&event_log, (size_t)table_info.log_address, (size_t)table_info.log_length)) {
+    event_log_t event_log;
+    if (!event_log_init(&event_log, (size_t)table_info.log_address, (size_t)table_info.log_length)) {
         printf("Error: Failed to initialize event log\n");
         free(ccel_data);
         return 1;
     }
 
-    vcca_event_log_dump(&event_log);
+    event_log_dump(&event_log);
 
     free(ccel_data);
     return 0;
@@ -570,6 +403,26 @@ int handle_connect(int sockfd)
     /* Step 5: Send verification result */
     msg_id = ret == VERIFY_SUCCESS ? VERIFY_SUCCESS_MSG_ID : VERIFY_FAILED_MSG_ID;
     write(sockfd, &msg_id, sizeof(msg_id));
+
+    if (ret != 0) {
+        return VERIFY_FAILED;
+    }
+
+    /* Send FDE usage information to server */
+    msg_id = use_fde ? USE_FDE_MSG_ID : VERIFY_REM_MSG_ID;
+    write(sockfd, &msg_id, sizeof(msg_id));
+
+    if (use_fde) {
+        printf("Send keyfile for encrypted rootfs.\n");
+        size_t key_file_len;
+        uint8_t* key_file = read_binary_file(rootfs_key_file, &key_file_len);
+        if (!key_file) {
+            printf("Failed to read key file data.\n");
+            return 1;
+        }
+        write(sockfd, key_file, key_file_len);
+        free(key_file);
+    }
     
     return ret;
 }
@@ -582,7 +435,8 @@ void print_usage(char *name)
     printf("\t-p, --port <port>                  Listening tcp port\n");
     printf("\t-m, --measurement <measurement>    Initial measurement for cVM\n");
     printf("\t-f, --firmware <json>              Enable firmware verification with JSON reference file\n");
-    printf("\t-e, --eventlog                     Dump VCCA event logs\n");
+    printf("\t-e, --eventlog                     Dump event log\n");
+    printf("\t-k, --fdekey <key_file>            Enable Full Disk Encryption with rootfs key file\n");
     printf("\t-h, --help                         Print Help (this message) and exit\n");
 }
 
@@ -603,12 +457,13 @@ int main(int argc, char *argv[])
         { "measurement", required_argument, NULL, 'm' },
         { "firmware", required_argument, NULL, 'f'},
         { "eventlog", no_argument, NULL, 'e'},
+        { "fdekey", required_argument, NULL, 'k'},
         { "help", no_argument, NULL, 'h' },
         { NULL, 0, NULL, 0 }
     };
     while (1) {
         int option_index = 0;
-        option = getopt_long(argc, argv, "i:p:m:f:eh", long_options, &option_index);
+        option = getopt_long(argc, argv, "i:p:m:f:k:eh", long_options, &option_index);
         if (option == -1) {
             break;
         }
@@ -641,6 +496,10 @@ int main(int argc, char *argv[])
                 exit(1);
             }
             dump_eventlog = true;
+            break;
+        case 'k':
+            use_fde = true;
+            rootfs_key_file = optarg;
             break;
         case 'h':
             print_usage(argv[0]);

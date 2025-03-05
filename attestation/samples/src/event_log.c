@@ -4,11 +4,11 @@
 #include <ctype.h>
 #include <openssl/evp.h>
 #include <openssl/sha.h>
-#include "vcca_event_log.h"
+#include "event_log.h"
 #include "config.h"
-#include "vcca_firmware_state.h"
+#include "firmware_state.h"
 /* Event log header magic number */
-#define VCCA_EVENT_LOG_MAGIC 0xFFFFFFFF
+#define EVENT_LOG_MAGIC 0xFFFFFFFF
 
 
 /* Function declarations */
@@ -26,17 +26,17 @@ typedef struct {
     uint8_t* digests;
     uint32_t event_size;
     uint8_t* event;
-} vcca_event_log_header_t;
+} event_log_header_t;
 
-bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
-                              vcca_event_log_entry_t* entry)
+bool process_event_log_entry(event_log_t* log, size_t* pos,
+                              event_log_entry_t* entry)
 {
     if (!log || !pos || !entry || *pos >= log->blob.length) {
         return false;
     }
 
     /* Initialize entry */
-    memset(entry, 0, sizeof(vcca_event_log_entry_t));
+    memset(entry, 0, sizeof(event_log_entry_t));
 
     /* Save initial position */
     size_t initial_pos = *pos;
@@ -46,8 +46,8 @@ bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
     entry->event_type = binary_blob_get_uint32(&log->blob, pos);
 
     /* Check if reached end of file */
-    if (register_index == VCCA_EVENT_LOG_MAGIC &&
-        entry->event_type == VCCA_EVENT_LOG_MAGIC) {
+    if (register_index == EVENT_LOG_MAGIC &&
+        entry->event_type == EVENT_LOG_MAGIC) {
         return false;
     }
 
@@ -113,7 +113,7 @@ bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
             
             /* Read digest data */
             binary_blob_get_bytes(&log->blob, pos, SHA256_DIGEST_LENGTH,
-                                entry->digests + i * SHA256_DIGEST_LENGTH);
+                                 entry->digests + i * SHA256_DIGEST_LENGTH);
         }
     }
 
@@ -151,7 +151,7 @@ bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
         /* Copy event data */
         if (event_data_size > 0) {
             binary_blob_get_bytes(&log->blob, pos, event_data_size,
-                                entry->event + (*pos - initial_pos));
+                                 entry->event + (*pos - initial_pos));
         }
     }
 
@@ -201,7 +201,7 @@ static void update_rem(rem_t* rem, const uint8_t* digest)
     EVP_MD_CTX_free(ctx);
 }
 
-bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length)
+bool event_log_init(event_log_t* log, size_t base, size_t length)
 {
     if (!log) {
         return false;
@@ -209,7 +209,7 @@ bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length)
 
     /* Read event log data from file */
     size_t file_size;
-    uint8_t* data = read_file_data(g_config.event_log_file, &file_size);
+    uint8_t* data = read_binary_file(g_config.event_log_file, &file_size);
     if (!data) {
         return false;
     }
@@ -302,7 +302,7 @@ static const char* get_event_type_string(uint32_t type)
 /* Add function to get algorithm name */
 static const char* get_algorithm_string(uint16_t algoid)
 {
-    switch(algoid) {
+    switch (algoid) {
         case TPM_ALG_ERROR: return "TPM_ALG_ERROR";
         case TPM_ALG_RSA: return "TPM_ALG_RSA";
         case TPM_ALG_SHA1: return "TPM_ALG_SHA1";
@@ -317,7 +317,7 @@ static const char* get_algorithm_string(uint16_t algoid)
 /* Add function to get digest length */
 static int get_digest_size(uint16_t algoid)
 {
-    switch(algoid) {
+    switch (algoid) {
         case TPM_ALG_SHA1: return 20;
         case TPM_ALG_SHA256: return 32;
         case TPM_ALG_SHA384: return 48;
@@ -326,7 +326,7 @@ static int get_digest_size(uint16_t algoid)
     }
 }
 
-bool vcca_event_log_process(vcca_event_log_t* log)
+bool event_log_process(event_log_t* log)
 {
     if (!log) {
         return false;
@@ -336,7 +336,7 @@ bool vcca_event_log_process(vcca_event_log_t* log)
            log->log_base, log->log_length);
 
     size_t pos = 0;
-    vcca_event_log_entry_t entry = {0};
+    event_log_entry_t entry = {0};
     int entry_count = 0;
 
     while (pos < log->blob.length) {
@@ -403,14 +403,14 @@ bool vcca_event_log_process(vcca_event_log_t* log)
     return true;
 }
 
-bool vcca_event_log_replay(vcca_event_log_t* log)
+bool event_log_replay(event_log_t* log)
 {
     if (!log) {
         return false;
     }
 
     size_t pos = 0;
-    vcca_event_log_entry_t entry = {0};
+    event_log_entry_t entry = {0};
     bool success = true;
 
     printf("\n=> Replay Rolling Hash - REM\n");
@@ -421,7 +421,7 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
     }
 
     /* Create firmware state object */
-    vcca_firmware_log_state_t* firmware_state = vcca_firmware_log_state_create(log);
+    firmware_log_state_t* firmware_state = firmware_log_state_create(log);
     if (!firmware_state) {
         printf("Error: Failed to create firmware state\n");
         return false;
@@ -434,8 +434,8 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
         }
 
         /* Check if reached end of file */
-        if (entry.rem_index == VCCA_EVENT_LOG_MAGIC &&
-            entry.event_type == VCCA_EVENT_LOG_MAGIC) {
+        if (entry.rem_index == EVENT_LOG_MAGIC &&
+            entry.event_type == EVENT_LOG_MAGIC) {
             break;
         }
 
@@ -466,8 +466,8 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
         }
 
         /* Check if reached end of file */
-        if (entry.rem_index == VCCA_EVENT_LOG_MAGIC &&
-            entry.event_type == VCCA_EVENT_LOG_MAGIC) {
+        if (entry.rem_index == EVENT_LOG_MAGIC &&
+            entry.event_type == EVENT_LOG_MAGIC) {
             break;
         }
 
@@ -495,21 +495,21 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
     }
 
     /* Extract firmware state information */
-    if (!vcca_firmware_log_state_extract(log, firmware_state)) {
+    if (!firmware_log_state_extract(log, firmware_state)) {
         printf("Warning: Failed to extract complete firmware state\n");
         success = false;
     } else {
         /* Print firmware state information */
-        vcca_firmware_log_state_print(firmware_state);
+        firmware_log_state_print(firmware_state);
     }
 
     /* Free firmware state object */
-    vcca_firmware_log_state_free(firmware_state);
+    firmware_log_state_free(firmware_state);
 
     return success;
 }
 
-void vcca_event_log_dump(vcca_event_log_t* log)
+void event_log_dump(event_log_t* log)
 {
     if (!log) {
         return;
@@ -518,7 +518,7 @@ void vcca_event_log_dump(vcca_event_log_t* log)
     printf("Event log base: 0x%zX, length: 0x%zX\n", log->log_base, log->log_length);
     printf("Actual data size: %zu bytes\n\n", log->blob.length);
 
-    vcca_event_log_process(log);
+    event_log_process(log);
     printf("\n");  /* Add empty line */
-    vcca_event_log_replay(log);
+    event_log_replay(log);
 }
