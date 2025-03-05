@@ -4,11 +4,7 @@ set -e
 
 THIS_DIR=$(dirname "$(readlink -f "$0")")
 export FDE_DIR=${THIS_DIR}/../../../full-disk-encryption/grub-boot
-
-INPUT_IMG=${FDE_DIR}/openEuler-24.03-LTS-SP1-cvm-aarch64.qcow2
 OUTPUT_IMG=${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2
-INPUT_HASH=${FDE_DIR}/hash.json
-
 DRACUT_DIR=/usr/lib/dracut/modules.d/98fde
 
 info() {
@@ -94,10 +90,19 @@ process_args() {
         fi
     fi
 
+    if [[ -z ${INPUT_HASH} ]]; then
+        error "Please specify the input measurement reference file via -g"
+    else
+        INPUT_HASH=$(readlink -f ${INPUT_HASH})
+        if [[ ! -f ${INPUT_HASH} ]]; then
+            error "File not exist ${INPUT_HASH}"
+        fi
+    fi
+
     if [ ${ATTEST_CASE} = "samples" ] || [ ${ATTEST_CASE} = "rats-tls" ]; then
         INITRD_DIR=${FDE_DIR}/initramfs/${ATTEST_CASE}
         ATTEST_DIR=${FDE_DIR}/attestation/${ATTEST_CASE}
-        OUTPUT_HASH=${ATTEST_DIR}/hash.json
+        OUTPUT_HASH=${ATTEST_DIR}/image_reference_measurement.json
     else
         error "Please specify samples or rats-tls for attestation"
     fi
@@ -113,9 +118,6 @@ process_args() {
 
     # Create output image
     cp ${INPUT_IMG} ${OUTPUT_IMG}
-
-    # Create output hash json
-    cp ${INPUT_HASH} ${OUTPUT_HASH}
 
     # Check and install packages needed
     HOST_PACKAGES=""
@@ -141,26 +143,97 @@ process_args() {
 # Create cmdline used for image update 
 cat > "${FDE_DIR}/cmdline.sh" << "EOF"
 #!/bin/bash
+set -e
 
-# Install required packages for guest
-dnf install -y cryptsetup
-
-# Update initramfs to include fde agent
-INITRD_NAME=`ls /boot | grep initramfs-6.6.0* | head -1`
-KERNEL_VERSION=$(echo ${INITRD_NAME} | sed -E 's/^initramfs-(.*)\.img$/\1/')
-dracut --add "fde" --add-drivers "dm-crypt" --force /boot/${INITRD_NAME} ${KERNEL_VERSION}
-
-# Configure kernel command line
-GRUB_FILE=/boot/efi/EFI/openEuler/grub.cfg
-sed -i 's/\(root=\)UUID=[^ ]*/\1\/dev\/mapper\/encroot/' ${GRUB_FILE}
+# Declare the grub configuration file
+CFG_FILE=/boot/efi/EFI/openEuler/grub.cfg
+# Update grub.cfg in place: 
+# Replace any occurrence of "root=UUID=..." with "root=/dev/mapper/encroot" 
+sed -i 's/root=UUID=[^ ]\+/root=\/dev\/mapper\/encroot/g' "$CFG_FILE" 
 
 # Update mount point of encrypted rootfs 
 FSTAB_FILE=/etc/fstab
 sed -i 's/\(UUID=[^ ]*\)\s\+\/\s\+ext4/\/dev\/mapper\/encroot \/ ext4/' ${FSTAB_FILE}
 
-# Generate new reference measurements for initramfs and grub.cfg
-sha256sum /boot/${INITRD_NAME} | awk "{print \$1}" > /root/initramfs_ref.txt
-sha256sum ${GRUB_FILE} | awk "{print \$1}" > /root/grub_cfg_ref.txt
+# Declare arrays to store version, kernel image, and initramfs image data
+declare -a VERSIONS
+declare -a KERNELS
+declare -a INITRDS
+
+# Use awk to parse the grub.cfg. For each menuentry block, output:
+# VERSION|KERNEL|INITRD
+while IFS="|" read -r VERSION KERNEL INITRD; do
+    VERSIONS+=("$VERSION")
+    KERNELS+=("$KERNEL")
+    INITRDS+=("$INITRD")
+done < <(awk '
+  # When a "menuentry" line is encountered, start a new entry
+  /^menuentry/ {
+    IN_MENU = 1;
+    KERNEL = "";
+    INITRD = "";
+    VERSION = "";
+    next;
+  }
+  # Locate the "linux" line and extract the kernel image path
+  IN_MENU && /linux[[:space:]]+\/vmlinuz/ {
+    if (match($0, /vmlinuz-[^ ]+/)) {
+      KERNEL = substr($0, RSTART, RLENGTH);
+      VERSION = KERNEL;
+      sub("^vmlinuz-", "", VERSION);
+    }
+    next;
+  }
+  # Locate the "initrd" line and extract the initramfs image path
+  IN_MENU && /initrd[[:space:]]+\/initramfs/ {
+    if (match($0, /initramfs-[^ ]+\.img/)) {
+      INITRD = substr($0, RSTART, RLENGTH);
+    }
+    next;
+  }
+  # At the end of a menuentry block (indicated by "}"), output the extracted data
+  IN_MENU && /^}/ {
+    if (KERNEL != "" && INITRD != "") {
+      print VERSION "|" KERNEL "|" INITRD;
+    }
+    IN_MENU = 0;
+  }
+' "$CFG_FILE")
+
+# JSON file to store updated measurements
+JSON_FILE="/root/new_ref_hash.json"
+{
+    echo "{"
+    echo "  \"grub\": \"\","
+    # Generate new reference measurements for grub.cfg
+    CFG_HASH=$(sha256sum ${CFG_FILE} | awk "{print \$1}") 
+    echo "  \"grub.cfg\": \"${CFG_HASH}\","
+    echo '  "kernels": ['
+    COUNT=${#VERSIONS[@]}
+    for (( i=0; i<COUNT; i++ )); do
+        # Update initramfs to include fde agent
+        dracut --add "fde" --add-drivers "dm-crypt" --force /boot/${INITRDS[i]} ${VERSIONS[i]}
+        # Generate new reference measurements for kernel
+        UNCOMPRESS_KERNEL="/boot/${KERNELS[i]}.uncompress"
+        gunzip -c /boot/${KERNELS[i]} > ${UNCOMPRESS_KERNEL}
+        KERNEL_HASH=$(sha256sum ${UNCOMPRESS_KERNEL} | awk "{print \$1}") 
+        rm -f ${UNCOMPRESS_KERNEL}
+        # Generate new reference measurements for initramfs 
+        INITRD_HASH=$(sha256sum /boot/${INITRDS[i]} | awk "{print \$1}") 
+        echo "    {"
+        echo "      \"version\": \"${VERSIONS[i]}\","
+        echo "      \"kernel\": \"${KERNEL_HASH}\","
+        echo "      \"initramfs\": \"${INITRD_HASH}\""
+        if [ $i -lt $((COUNT - 1)) ]; then
+            echo "    },"
+        else
+            echo "    }"
+        fi
+    done
+    echo "  ],"
+    echo "  \"hash_alg\": \"sha-256\""
+    echo "}"
+} > "$JSON_FILE"
 
 EOF
 
@@ -221,14 +294,11 @@ mount_rootfs() {
     # Mount CVM image and update golden measurements
     mkdir -p /tmp/mnt/oldroot
     mount ${ROOT} /tmp/mnt/oldroot
-    GOLDEN_INITRD_MEASURE=$(cat /tmp/mnt/oldroot/root/initramfs_ref.txt)
-    info "GOLDEN_INITRD_MEASURE: ${GOLDEN_INITRD_MEASURE}"
-    sed -i "s/\"initramfs\": \".*\"/\"initramfs\": \"$GOLDEN_INITRD_MEASURE\"/" ${OUTPUT_HASH}
-    GOLDEN_GRUBCFG_MEASURE=$(cat /tmp/mnt/oldroot/root/grub_cfg_ref.txt)
-    info "GOLDEN_GRUBCFG_MEASURE: ${GOLDEN_GRUBCFG_MEASURE}"
-    sed -i "s/\"grub.cfg\": \".*\"/\"grub.cfg\": \"$GOLDEN_GRUBCFG_MEASURE\"/" ${OUTPUT_HASH}
-    rm /tmp/mnt/oldroot/root/initramfs_ref.txt
-    rm /tmp/mnt/oldroot/root/grub_cfg_ref.txt
+    JSON_FILE=/tmp/mnt/oldroot/root/new_ref_hash.json
+    GRUB_HASH=$(grep '"grub"' ${INPUT_HASH} | head -n 1 | cut -d'"' -f4)
+    sed -i "s/\"grub\": \"\"/\"grub\": \"${GRUB_HASH}\"/" ${JSON_FILE}
+    cp ${JSON_FILE} ${OUTPUT_HASH}
+    rm ${JSON_FILE}
 
     # Backup rootfs data
     info "Backup rootfs data ..."

@@ -6,7 +6,7 @@ IP_ADDR=$(ip addr show eth0 | sed -n '/inet /s/.*inet \([0-9.]\+\).*/\1/p')
 echo "fde: Running attestation in pre-mount phase..." > /dev/console
 echo "fde: CVM IP Address: ${IP_ADDR} ..." > /dev/console
 echo "fde: Attestation server port: 7220 ..." > /dev/console
-/usr/bin/virtcca-server -i ${IP_ADDR} -p 7220 -k 
+/usr/bin/virtcca-server -i ${IP_ADDR} -p 7220 
 sleep 1
 
 echo "fde: Running rootfs decryption in initramfs..." > /dev/console
