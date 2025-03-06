@@ -468,16 +468,44 @@ int main(int argc, char *argv[])
             break;
         }
         switch (option) {
-        case 'i':
-            ip = inet_addr(optarg);
-            break;
-        case 'p':
-            port = htons(atoi(optarg));
-            break;
-        case 'm':
-            measurement_hex = optarg;
-            if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
-                printf("Invalid measurement.\n");
+            case 'i':
+                ip = inet_addr(optarg);
+                break;
+            case 'p':
+                port = htons(atoi(optarg));
+                break;
+            case 'm':
+                measurement_hex = optarg;
+                if (hex_to_bytes(measurement_hex, strlen(measurement_hex), measurement, &measurement_len) != 0) {
+                    printf("Invalid measurement.\n");
+                    exit(1);
+                }
+                break;
+            case 'f':
+                if (dump_eventlog) {
+                    printf("Error: Cannot use -f and -e together\n");
+                    exit(1);
+                }
+                use_firmware = true;
+                ref_json_file = optarg;
+                g_config.json_file = optarg;
+                break;
+            case 'e':
+                if (use_firmware) {
+                    printf("Error: Cannot use -e and -f together\n");
+                    exit(1);
+                }
+                dump_eventlog = true;
+                break;
+            case 'k':
+                use_fde = true;
+                rootfs_key_file = optarg;
+                break;
+            case 'h':
+                print_usage(argv[0]);
+                exit(0);
+            default:
+                fprintf(stderr, "Try '%s --help' for more information.\n", argv[0]);
                 exit(1);
             }
             break;
