@@ -1,5 +1,5 @@
-#ifndef VCCA_EVENT_LOG_H
-#define VCCA_EVENT_LOG_H
+#ifndef EVENT_LOG_H
+#define EVENT_LOG_H
 
 #include <stdint.h>
 #include "rem.h"
@@ -58,7 +58,7 @@ typedef enum {
     EV_EFI_PLATFORM_FIRMWARE_BLOB = EV_EFI_EVENT_BASE + 0x8,
     EV_EFI_HANDOFF_TABLES = EV_EFI_EVENT_BASE + 0x9,
     EV_EFI_VARIABLE_AUTHORITY = EV_EFI_EVENT_BASE + 0xe0
-} vcca_event_type_t;
+} event_type_t;
 
 typedef struct {
     uint32_t rem_index;
@@ -70,22 +70,22 @@ typedef struct {
     uint8_t* event;
     uint32_t algorithms_number;  /* Number of algorithms */
     algorithm_info_t* algorithms;  /* Array of algorithm information */
-} vcca_event_log_entry_t;
+} event_log_entry_t;
 
 typedef struct {
     binary_blob_t blob;
     size_t log_base;
     size_t log_length;
     rem_t rems[REM_COUNT];
-} vcca_event_log_t;
+} event_log_t;
 
 /* Event log operation functions */
-bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length);
-bool vcca_event_log_process(vcca_event_log_t* log);
-bool vcca_event_log_replay(vcca_event_log_t* log);
-void vcca_event_log_dump(vcca_event_log_t* log);
+bool event_log_init(event_log_t* log, size_t base, size_t length);
+bool event_log_process(event_log_t* log);
+bool event_log_replay(event_log_t* log);
+void event_log_dump(event_log_t* log);
 
 /* Internal function declarations */
-bool process_event_log_entry(vcca_event_log_t* log, size_t* pos, vcca_event_log_entry_t* entry);
+bool process_event_log_entry(event_log_t* log, size_t* pos, event_log_entry_t* entry);
 
-#endif /* VCCA_EVENT_LOG_H */
+#endif /* EVENT_LOG_H */

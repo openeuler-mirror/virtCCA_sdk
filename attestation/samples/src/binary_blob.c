@@ -4,88 +4,12 @@
 #include <ctype.h>
 #include <stdbool.h>
 #include "binary_blob.h"
+#include "utils.h"
 
-/* File reading utility function */
-uint8_t* read_file_data(const char* filename, size_t* out_size)
+/* Forward binary blob utilities to the read_file_data_binary function in utils.c */
+uint8_t* read_binary_file(const char* filename, size_t* out_size)
 {
-    if (!filename || !out_size) {
-        return NULL;
-    }
-
-    /* Open file */
-    FILE* fp = fopen(filename, "rb");
-    if (!fp) {
-        printf("Error: Could not open file: %s\n", filename);
-        return NULL;
-    }
-
-    /* Get file size */
-    fseek(fp, 0, SEEK_END);
-    size_t file_size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    /* Allocate memory */
-    uint8_t* data = (uint8_t*)malloc(file_size);
-    if (!data) {
-        printf("Error: Failed to allocate memory for file data\n");
-        fclose(fp);
-        return NULL;
-    }
-
-    /* Read data */
-    if (fread(data, 1, file_size, fp) != file_size) {
-        printf("Error: Failed to read file data\n");
-        free(data);
-        fclose(fp);
-        return NULL;
-    }
-
-    fclose(fp);
-    *out_size = file_size;
-    return data;
-}
-
-/* Text file reading utility function */
-char* read_text_file(const char* filename, size_t* out_size)
-{
-    if (!filename || !out_size) {
-        return NULL;
-    }
-
-    /* Open file */
-    FILE* fp = fopen(filename, "r");
-    if (!fp) {
-        printf("Error: Could not open file: %s\n", filename);
-        return NULL;
-    }
-
-    /* Get file size */
-    fseek(fp, 0, SEEK_END);
-    size_t file_size = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-
-    /* Allocate memory (add 1 for null terminator) */
-    char* data = (char*)malloc(file_size + 1);
-    if (!data) {
-        printf("Error: Failed to allocate memory for file data\n");
-        fclose(fp);
-        return NULL;
-    }
-
-    /* Read data */
-    if (fread(data, 1, file_size, fp) != file_size) {
-        printf("Error: Failed to read file data\n");
-        free(data);
-        fclose(fp);
-        return NULL;
-    }
-
-    /* Add null terminator */
-    data[file_size] = '\0';
-
-    fclose(fp);
-    *out_size = file_size;
-    return data;
+    return read_file_data_binary(filename, out_size);
 }
 
 bool binary_blob_init(binary_blob_t* blob, uint8_t* data, size_t length, size_t base)

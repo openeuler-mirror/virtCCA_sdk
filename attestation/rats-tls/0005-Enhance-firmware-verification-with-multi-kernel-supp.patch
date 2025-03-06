@@ -1,0 +1,1229 @@
+From de9b127333ccf998dcce9db04dc1b2da505ef58b Mon Sep 17 00:00:00 2001
+From: unholyzero <yuanhai4@huawei.com>
+Date: Wed, 5 Mar 2025 09:52:42 +0800
+Subject: [PATCH] Enhance firmware verification with multi-kernel support
+
+---
+ samples/virtcca-client/CMakeLists.txt         |   4 +-
+ .../{vcca_event_log.c => event_log.c}         |  50 ++--
+ ...vcca_firmware_state.c => firmware_state.c} |  30 +-
+ .../inc/{vcca_event_log.h => event_log.h}     |  22 +-
+ ...vcca_firmware_state.h => firmware_state.h} |  46 +--
+ samples/virtcca-client/inc/verify.h           |  21 +-
+ samples/virtcca-client/rats-client.c          | 281 ++++--------------
+ samples/virtcca-client/rem.c                  |   1 -
+ samples/virtcca-client/verify.c               | 231 +++++++-------
+ samples/virtcca-server/rats-server.c          |   7 +-
+ 10 files changed, 268 insertions(+), 425 deletions(-)
+ rename samples/virtcca-client/{vcca_event_log.c => event_log.c} (92%)
+ rename samples/virtcca-client/{vcca_firmware_state.c => firmware_state.c} (88%)
+ rename samples/virtcca-client/inc/{vcca_event_log.h => event_log.h} (83%)
+ rename samples/virtcca-client/inc/{vcca_firmware_state.h => firmware_state.h} (57%)
+
+diff --git a/samples/virtcca-client/CMakeLists.txt b/samples/virtcca-client/CMakeLists.txt
+index def8e0c..2d0e031 100644
+--- a/samples/virtcca-client/CMakeLists.txt
++++ b/samples/virtcca-client/CMakeLists.txt
+@@ -26,9 +26,9 @@ set(SOURCES rats-client.c
+            token_parse.c 
+            token_validate.c 
+            ima_measure.c
+-           vcca_event_log.c
++           event_log.c
+            rem.c
+-           vcca_firmware_state.c
++           firmware_state.c
+            binary_blob.c
+            verify.c
+            config.c)
+diff --git a/samples/virtcca-client/vcca_event_log.c b/samples/virtcca-client/event_log.c
+similarity index 92%
+rename from samples/virtcca-client/vcca_event_log.c
+rename to samples/virtcca-client/event_log.c
+index 3881ea4..6e181f3 100644
+--- a/samples/virtcca-client/vcca_event_log.c
++++ b/samples/virtcca-client/event_log.c
+@@ -4,11 +4,11 @@
+ #include <ctype.h>
+ #include <openssl/evp.h>
+ #include <openssl/sha.h>
+-#include "vcca_event_log.h"
++#include "event_log.h"
+ #include "config.h"
+-#include "vcca_firmware_state.h"
++#include "firmware_state.h"
+ /* Event log header magic number */
+-#define VCCA_EVENT_LOG_MAGIC 0xFFFFFFFF
++#define EVENT_LOG_MAGIC 0xFFFFFFFF
+ 
+ 
+ /* Function declarations */
+@@ -26,17 +26,17 @@ typedef struct {
+     uint8_t* digests;
+     uint32_t event_size;
+     uint8_t* event;
+-} vcca_event_log_header_t;
++} event_log_header_t;
+ 
+-bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
+-                              vcca_event_log_entry_t* entry)
++bool process_event_log_entry(event_log_t* log, size_t* pos,
++                              event_log_entry_t* entry)
+ {
+     if (!log || !pos || !entry || *pos >= log->blob.length) {
+         return false;
+     }
+ 
+     /* Initialize entry */
+-    memset(entry, 0, sizeof(vcca_event_log_entry_t));
++    memset(entry, 0, sizeof(event_log_entry_t));
+ 
+     /* Save initial position */
+     size_t initial_pos = *pos;
+@@ -46,8 +46,8 @@ bool process_event_log_entry(vcca_event_log_t* log, size_t* pos,
+     entry->event_type = binary_blob_get_uint32(&log->blob, pos);
+ 
+     /* Check if reached end of file */
+-    if (register_index == VCCA_EVENT_LOG_MAGIC &&
+-        entry->event_type == VCCA_EVENT_LOG_MAGIC) {
++    if (register_index == EVENT_LOG_MAGIC &&
++        entry->event_type == EVENT_LOG_MAGIC) {
+         return false;
+     }
+ 
+@@ -201,7 +201,7 @@ static void update_rem(rem_t* rem, const uint8_t* digest)
+     EVP_MD_CTX_free(ctx);
+ }
+ 
+-bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length)
++bool event_log_init(event_log_t* log, size_t base, size_t length)
+ {
+     if (!log) {
+         return false;
+@@ -326,7 +326,7 @@ static int get_digest_size(uint16_t algoid)
+     }
+ }
+ 
+-bool vcca_event_log_process(vcca_event_log_t* log)
++bool event_log_process(event_log_t* log)
+ {
+     if (!log) {
+         return false;
+@@ -336,7 +336,7 @@ bool vcca_event_log_process(vcca_event_log_t* log)
+            log->log_base, log->log_length);
+ 
+     size_t pos = 0;
+-    vcca_event_log_entry_t entry = {0};
++    event_log_entry_t entry = {0};
+     int entry_count = 0;
+ 
+     while (pos < log->blob.length) {
+@@ -403,14 +403,14 @@ bool vcca_event_log_process(vcca_event_log_t* log)
+     return true;
+ }
+ 
+-bool vcca_event_log_replay(vcca_event_log_t* log)
++bool event_log_replay(event_log_t* log)
+ {
+     if (!log) {
+         return false;
+     }
+ 
+     size_t pos = 0;
+-    vcca_event_log_entry_t entry = {0};
++    event_log_entry_t entry = {0};
+     bool success = true;
+ 
+     printf("\n=> Replay Rolling Hash - REM\n");
+@@ -421,7 +421,7 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
+     }
+ 
+     /* Create firmware state object */
+-    vcca_firmware_log_state_t* firmware_state = vcca_firmware_log_state_create(log);
++    firmware_log_state_t* firmware_state = firmware_log_state_create(log);
+     if (!firmware_state) {
+         printf("Error: Failed to create firmware state\n");
+         return false;
+@@ -434,8 +434,8 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
+         }
+ 
+         /* Check if reached end of file */
+-        if (entry.rem_index == VCCA_EVENT_LOG_MAGIC &&
+-            entry.event_type == VCCA_EVENT_LOG_MAGIC) {
++        if (entry.rem_index == EVENT_LOG_MAGIC &&
++            entry.event_type == EVENT_LOG_MAGIC) {
+             break;
+         }
+ 
+@@ -466,8 +466,8 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
+         }
+ 
+         /* Check if reached end of file */
+-        if (entry.rem_index == VCCA_EVENT_LOG_MAGIC &&
+-            entry.event_type == VCCA_EVENT_LOG_MAGIC) {
++        if (entry.rem_index == EVENT_LOG_MAGIC &&
++            entry.event_type == EVENT_LOG_MAGIC) {
+             break;
+         }
+ 
+@@ -495,21 +495,21 @@ bool vcca_event_log_replay(vcca_event_log_t* log)
+     }
+ 
+     /* Extract firmware state information */
+-    if (!vcca_firmware_log_state_extract(log, firmware_state)) {
++    if (!firmware_log_state_extract(log, firmware_state)) {
+         printf("Warning: Failed to extract complete firmware state\n");
+         success = false;
+     } else {
+         /* Print firmware state information */
+-        vcca_firmware_log_state_print(firmware_state);
++        firmware_log_state_print(firmware_state);
+     }
+ 
+     /* Free firmware state object */
+-    vcca_firmware_log_state_free(firmware_state);
++    firmware_log_state_free(firmware_state);
+ 
+     return success;
+ }
+ 
+-void vcca_event_log_dump(vcca_event_log_t* log)
++void event_log_dump(event_log_t* log)
+ {
+     if (!log) {
+         return;
+@@ -518,7 +518,7 @@ void vcca_event_log_dump(vcca_event_log_t* log)
+     printf("Event log base: 0x%zX, length: 0x%zX\n", log->log_base, log->log_length);
+     printf("Actual data size: %zu bytes\n\n", log->blob.length);
+ 
+-    vcca_event_log_process(log);
++    event_log_process(log);
+     printf("\n");  /* Add empty line */
+-    vcca_event_log_replay(log);
++    event_log_replay(log);
+ }
+\ No newline at end of file
+diff --git a/samples/virtcca-client/vcca_firmware_state.c b/samples/virtcca-client/firmware_state.c
+similarity index 88%
+rename from samples/virtcca-client/vcca_firmware_state.c
+rename to samples/virtcca-client/firmware_state.c
+index ec45184..d2679af 100644
+--- a/samples/virtcca-client/vcca_firmware_state.c
++++ b/samples/virtcca-client/firmware_state.c
+@@ -1,11 +1,11 @@
+ #include <stdio.h>
+ #include <stdlib.h>
+ #include <string.h>
+-#include "vcca_event_log.h"
+-#include "vcca_firmware_state.h"
++#include "event_log.h"
++#include "firmware_state.h"
+ 
+ /* Helper function: Extract EFI image information from event data */
+-static bool extract_efi_image(vcca_event_log_entry_t* entry, vcca_efi_image_t* image)
++static bool extract_efi_image(event_log_entry_t* entry, efi_image_t* image)
+ {
+     if (!entry || !image || !entry->digests || entry->digest_count == 0) {
+         return false;
+@@ -22,7 +22,7 @@ static bool extract_efi_image(vcca_event_log_entry_t* entry, vcca_efi_image_t* i
+ }
+ 
+ /* Helper function: Extract GRUB information from event data */
+-static bool extract_grub_info(vcca_event_log_entry_t* entry, vcca_grub_state_t* grub)
++static bool extract_grub_info(event_log_entry_t* entry, grub_state_t* grub)
+ {
+     if (!entry || !grub || !entry->event || entry->event_size == 0) {
+         return false;
+@@ -80,7 +80,7 @@ static const uint8_t* find_substring(const uint8_t* data, size_t data_len, const
+ }
+ 
+ /* Print firmware state information */
+-void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state)
++void firmware_log_state_print(const firmware_log_state_t* state)
+ {
+     if (!state) {
+         printf("Firmware state is empty\n");
+@@ -133,19 +133,19 @@ void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state)
+ }
+ 
+ /* Create firmware log state */
+-vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log)
++firmware_log_state_t* firmware_log_state_create(event_log_t* log)
+ {
+-    vcca_firmware_log_state_t* state = (vcca_firmware_log_state_t*)calloc(1, sizeof(vcca_firmware_log_state_t));
++    firmware_log_state_t* state = (firmware_log_state_t*)calloc(1, sizeof(firmware_log_state_t));
+     if (!state) {
+         return NULL;
+     }
+ 
+-    state->efi = (vcca_efi_state_t*)calloc(1, sizeof(vcca_efi_state_t));
+-    state->grub = (vcca_grub_state_t*)calloc(1, sizeof(vcca_grub_state_t));
+-    state->linux_kernel = (vcca_linux_kernel_state_t*)calloc(1, sizeof(vcca_linux_kernel_state_t));
++    state->efi = (efi_state_t*)calloc(1, sizeof(efi_state_t));
++    state->grub = (grub_state_t*)calloc(1, sizeof(grub_state_t));
++    state->linux_kernel = (linux_kernel_state_t*)calloc(1, sizeof(linux_kernel_state_t));
+ 
+     if (!state->efi || !state->grub || !state->linux_kernel) {
+-        vcca_firmware_log_state_free(state);
++        firmware_log_state_free(state);
+         return NULL;
+     }
+ 
+@@ -153,7 +153,7 @@ vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log)
+ }
+ 
+ /* Free firmware log state */
+-void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state)
++void firmware_log_state_free(firmware_log_state_t* state)
+ {
+     if (!state) {
+         return;
+@@ -183,14 +183,14 @@ void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state)
+ }
+ 
+ /* Extract firmware log state */
+-bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_state_t* state)
++bool firmware_log_state_extract(event_log_t* log, firmware_log_state_t* state)
+ {
+     if (!log || !state) {
+         return false;
+     }
+ 
+     size_t pos = 0;
+-    vcca_event_log_entry_t entry;
++    event_log_entry_t entry;
+     uint32_t efi_image_count = 0;
+     bool has_grub_info = false;
+     bool has_kernel_info = false;
+@@ -205,7 +205,7 @@ bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_st
+ 
+     /* Allocate EFI image array */
+     if (efi_image_count > 0) {
+-        state->efi->images = (vcca_efi_image_t*)calloc(efi_image_count, sizeof(vcca_efi_image_t));
++        state->efi->images = (efi_image_t*)calloc(efi_image_count, sizeof(efi_image_t));
+         if (!state->efi->images) {
+             return false;
+         }
+diff --git a/samples/virtcca-client/inc/vcca_event_log.h b/samples/virtcca-client/inc/event_log.h
+similarity index 83%
+rename from samples/virtcca-client/inc/vcca_event_log.h
+rename to samples/virtcca-client/inc/event_log.h
+index f34ef94..94e9097 100644
+--- a/samples/virtcca-client/inc/vcca_event_log.h
++++ b/samples/virtcca-client/inc/event_log.h
+@@ -1,5 +1,5 @@
+-#ifndef VCCA_EVENT_LOG_H
+-#define VCCA_EVENT_LOG_H
++#ifndef EVENT_LOG_H
++#define EVENT_LOG_H
+ 
+ #include <stdint.h>
+ #include "rem.h"
+@@ -59,7 +59,7 @@ typedef enum {
+     EV_EFI_PLATFORM_FIRMWARE_BLOB = EV_EFI_EVENT_BASE + 0x8,
+     EV_EFI_HANDOFF_TABLES = EV_EFI_EVENT_BASE + 0x9,
+     EV_EFI_VARIABLE_AUTHORITY = EV_EFI_EVENT_BASE + 0xe0
+-} vcca_event_type_t;
++} event_type_t;
+ 
+ typedef struct {
+     uint32_t rem_index;
+@@ -71,22 +71,22 @@ typedef struct {
+     uint8_t* event;
+     uint32_t algorithms_number;  /* Number of algorithms */
+     algorithm_info_t* algorithms;  /* Array of algorithm information */
+-} vcca_event_log_entry_t;
++} event_log_entry_t;
+ 
+ typedef struct {
+     binary_blob_t blob;
+     size_t log_base;
+     size_t log_length;
+     rem_t rems[REM_COUNT];
+-} vcca_event_log_t;
++} event_log_t;
+ 
+ /* Event log operation functions */
+-bool vcca_event_log_init(vcca_event_log_t* log, size_t base, size_t length);
+-bool vcca_event_log_process(vcca_event_log_t* log);
+-bool vcca_event_log_replay(vcca_event_log_t* log);
+-void vcca_event_log_dump(vcca_event_log_t* log);
++bool event_log_init(event_log_t* log, size_t base, size_t length);
++bool event_log_process(event_log_t* log);
++bool event_log_replay(event_log_t* log);
++void event_log_dump(event_log_t* log);
+ 
+ /* Internal function declarations */
+-bool process_event_log_entry(vcca_event_log_t* log, size_t* pos, vcca_event_log_entry_t* entry);
++bool process_event_log_entry(event_log_t* log, size_t* pos, event_log_entry_t* entry);
+ 
+-#endif /* VCCA_EVENT_LOG_H */
+\ No newline at end of file
++#endif /* EVENT_LOG_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/vcca_firmware_state.h b/samples/virtcca-client/inc/firmware_state.h
+similarity index 57%
+rename from samples/virtcca-client/inc/vcca_firmware_state.h
+rename to samples/virtcca-client/inc/firmware_state.h
+index 56bd2fb..1d6f199 100644
+--- a/samples/virtcca-client/inc/vcca_firmware_state.h
++++ b/samples/virtcca-client/inc/firmware_state.h
+@@ -1,27 +1,27 @@
+-#ifndef VCCA_FIRMWARE_STATE_H
+-#define VCCA_FIRMWARE_STATE_H
++#ifndef FIRMWARE_STATE_H
++#define FIRMWARE_STATE_H
+ 
+ #include <stdint.h>
+ #include <stdbool.h>
+-#include "vcca_event_log.h"
++#include "event_log.h"
+ 
+ /* EFI state structure */
+ typedef struct {
+     uint8_t* image_hash;
+     uint32_t image_hash_size;
+     char* image_path;
+-} vcca_efi_image_t;
++} efi_image_t;
+ 
+ typedef struct {
+-    vcca_efi_image_t* images;
++    efi_image_t* images;
+     uint32_t image_count;
+-} vcca_efi_state_t;
++} efi_state_t;
+ 
+ /* GRUB conf state structure */
+ typedef struct {
+     uint8_t* config_hash;
+     uint32_t config_hash_size;
+-} vcca_grub_state_t;
++} grub_state_t;
+ 
+ /* Linux kernel state structure */
+ typedef struct {
+@@ -29,24 +29,30 @@ typedef struct {
+     uint32_t kernel_hash_size;
+     uint8_t* initrd_hash;
+     uint32_t initrd_hash_size;
+-} vcca_linux_kernel_state_t;
++} linux_kernel_state_t;
+ 
+ /* Firmware log state structure */
+ typedef struct {
+-    vcca_efi_state_t* efi;
+-    vcca_grub_state_t* grub;
+-    vcca_linux_kernel_state_t* linux_kernel;
+-    vcca_event_log_entry_t* raw_events;
++    efi_state_t* efi;
++    grub_state_t* grub;
++    linux_kernel_state_t* linux_kernel;
++    event_log_entry_t* raw_events;
+     uint32_t raw_events_count;
+     uint16_t hash_algo;
+-} vcca_firmware_log_state_t;
++} firmware_log_state_t;
+ 
+ /* JSON parsing state */
++typedef struct kernel_version_data {
++    char* version;
++    char* kernel;
++    char* initramfs;
++} kernel_version_t;
++
+ typedef struct {
+     char* grub;
+     char* grub_cfg;
+-    char* kernel;
+-    char* initramfs;
++    kernel_version_t* kernels;
++    int kernel_count;
+     char* hash_alg;
+ } firmware_reference_t;
+ 
+@@ -62,9 +68,9 @@ typedef struct {
+ } acpi_table_info_t;
+ 
+ /* Function declarations */
+-vcca_firmware_log_state_t* vcca_firmware_log_state_create(vcca_event_log_t* log);
+-void vcca_firmware_log_state_free(vcca_firmware_log_state_t* state);
+-bool vcca_firmware_log_state_extract(vcca_event_log_t* log, vcca_firmware_log_state_t* state);
+-void vcca_firmware_log_state_print(const vcca_firmware_log_state_t* state);
++firmware_log_state_t* firmware_log_state_create(event_log_t* log);
++void firmware_log_state_free(firmware_log_state_t* state);
++bool firmware_log_state_extract(event_log_t* log, firmware_log_state_t* state);
++void firmware_log_state_print(const firmware_log_state_t* state);
+ 
+-#endif /* VCCA_FIRMWARE_STATE_H */
+\ No newline at end of file
++#endif /* FIRMWARE_STATE_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/inc/verify.h b/samples/virtcca-client/inc/verify.h
+index d077537..fb2b90e 100644
+--- a/samples/virtcca-client/inc/verify.h
++++ b/samples/virtcca-client/inc/verify.h
+@@ -3,8 +3,8 @@
+ 
+ #include <stdbool.h>
+ #include "rem.h"
+-#include "vcca_event_log.h"
+-#include "vcca_firmware_state.h"
++#include "event_log.h"
++#include "firmware_state.h"
+ 
+ /* Internal function declarations */
+ bool read_token_rem(rem_t rems[REM_COUNT]);
+@@ -18,22 +18,7 @@ void verify_single_rem(int rem_index, const rem_t* rem1, const rem_t* rem2);
+  * @return true Verification successful
+  * @return false Verification failed
+  */
+-bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_t* state);
++bool verify_firmware_state(const char* json_file, const firmware_log_state_t* state);
+ 
+-/**
+- * @brief Verifying REM Values
+- *
+- * This function performs the following steps:
+- * 1. Read the CCEL file
+- * 2. Obtain the event log area information
+- * 3. Initialize the event log processor
+- * 4. Replay the event log and calculate the REM value
+- * 5. Read the REM value in the token
+- * 6. Verify that the calculated REM value is consistent with the value in the token
+- *
+- * @return true Verification succeeded.
+- * @return false Verification failed.
+- */
+-bool verify_rem(void);
+ 
+ #endif /* VERIFY_H */
+\ No newline at end of file
+diff --git a/samples/virtcca-client/rats-client.c b/samples/virtcca-client/rats-client.c
+index a874999..1888d81 100644
+--- a/samples/virtcca-client/rats-client.c
++++ b/samples/virtcca-client/rats-client.c
+@@ -27,8 +27,8 @@
+ 
+ #include "token_parse.h"
+ #include "token_validate.h"
+-#include "vcca_event_log.h"
+-#include "vcca_firmware_state.h"
++#include "event_log.h"
++#include "firmware_state.h"
+ #include "binary_blob.h"
+ #include "verify.h"
+ #include "config.h"
+@@ -86,14 +86,8 @@ typedef struct {
+ } client_args;
+ 
+ /* Forward declarations */
+-static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
+ static char* extract_json_string(const char* json, const char* key);
+-static bool parse_json_file(const char* filename, firmware_reference_t* ref);
+-static void free_firmware_reference(firmware_reference_t* ref);
+-static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
+-                                 const uint8_t* actual_hash, size_t hash_size);
+ static int parse_input_args(int argc, char **argv, client_args *args);
+-static bool verify_firmware_state_local(const char* json_file, const vcca_firmware_log_state_t* state);
+ static int request_and_save_firmware_data(rats_tls_handle handle);
+ static int handle_eventlogs_command(void);
+ 
+@@ -159,76 +153,7 @@ int user_callback(void *args)
+ 	}
+ 	RTLS_INFO("RIM verification passed\n");
+ 
+-	/* Step 3: Verify firmware if enabled */
+-	if (client_config && client_config->use_firmware) {
+-		RTLS_DEBUG("Starting firmware verification");
+-		/* Initialize event log processor */
+-		vcca_event_log_t event_log;
+-		if (!vcca_event_log_init(&event_log, 0, 0)) {
+-			RTLS_ERR("Error: Failed to initialize event log\n");
+-			return false;
+-		}
+-		RTLS_DEBUG("Event log initialized");
+-
+-		/* Replay event log to calculate REM values */
+-		if (!vcca_event_log_replay(&event_log)) {
+-			RTLS_ERR("Error: Failed to replay event log\n");
+-			return false;
+-		}
+-		RTLS_DEBUG("Event log replayed successfully");
+-
+-		/* Verify REM values from token */
+-		RTLS_INFO("Verifying REM values from token...\n");
+-		bool all_rems_passed = true;
+-		for (int i = 0; i < REM_COUNT; i++) {
+-			RTLS_DEBUG("Verifying REM[%d]", i);
+-			if (token.cvm_token.rem[i].len != sizeof(rem_t)) {
+-				RTLS_ERR("Error: Invalid REM[%d] size in token\n", i);
+-				return false;
+-			}
+-			verify_single_rem(i, (rem_t*)token.cvm_token.rem[i].ptr, &event_log.rems[i]);
+-			if (!rem_compare((rem_t*)token.cvm_token.rem[i].ptr, &event_log.rems[i])) {
+-				all_rems_passed = false;
+-			}
+-		}
+-
+-		if (!all_rems_passed) {
+-			RTLS_ERR("REM verification failed\n");
+-			return false;
+-		}
+-
+-		RTLS_INFO("All REM values verified successfully\n");
+-
+-		/* If JSON file is provided, verify firmware state */
+-		if (client_config->ref_json_file) {
+-			RTLS_INFO("Verifying firmware state...\n");
+-			vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
+-			if (!state) {
+-				RTLS_ERR("Error: Failed to create firmware state\n");
+-				return false;
+-			}
+-			RTLS_DEBUG("Firmware state created");
+-
+-			if (!vcca_firmware_log_state_extract(&event_log, state)) {
+-				RTLS_ERR("Error: Failed to extract firmware state\n");
+-				vcca_firmware_log_state_free(state);
+-				return false;
+-			}
+-			RTLS_DEBUG("Firmware state extracted");
+-
+-			if (!verify_firmware_state_local(client_config->ref_json_file, state)) {
+-				RTLS_ERR("Error: Firmware state verification failed\n");
+-				vcca_firmware_log_state_free(state);
+-				return false;
+-			}
+-			RTLS_DEBUG("Firmware state verified successfully");
+-
+-			vcca_firmware_log_state_free(state);
+-			RTLS_INFO("Firmware state verification passed\n");
+-		}
+-	}
+-
+-	RTLS_DEBUG("All verifications completed successfully");
++	RTLS_DEBUG("All verifications completed successfully\n");
+ 	return true;
+ }
+ 
+@@ -510,22 +435,66 @@ int rats_tls_client_startup(client_args *args)
+ 
+ 		/* Below is the firmware verification logic */
+ 		/* Initialize event log processor */
+-		vcca_event_log_t event_log;
+-		if (!vcca_event_log_init(&event_log, 0, 0)) {
++		event_log_t event_log;
++		if (!event_log_init(&event_log, 0, 0)) {
+ 			RTLS_ERR("Failed to initialize event log\n");
+ 			ret = RATS_TLS_ERR_INVALID;
+ 			goto err;
+ 		}
+ 
+ 		/* Replay event log to calculate REM values */
+-		if (!vcca_event_log_replay(&event_log)) {
++		if (!event_log_replay(&event_log)) {
+ 			RTLS_ERR("Failed to replay event log\n");
+ 			ret = RATS_TLS_ERR_INVALID;
+ 			goto err;
+ 		}
+ 
++		/* Verify REM values from token */
++		RTLS_INFO("Verifying REM values from token...\n");
++		
++		/* Get token from verifier context */
++		rtls_core_context_t *ctx = (rtls_core_context_t *)handle;
++		if (!ctx || !ctx->verifier || !ctx->verifier->verifier_private) {
++			RTLS_ERR("Failed to get verifier context\n");
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++		
++		/* Parse token from verifier_private */
++		cca_token_t token = {0};
++		cca_token_buf_t *cca_token_buf = (cca_token_buf_t *)ctx->verifier->verifier_private;
++		
++		if (parse_cca_attestation_token(&token, cca_token_buf->buf, cca_token_buf->buf_size) != VIRTCCA_SUCCESS) {
++			RTLS_ERR("Failed to parse virtcca token\n");
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++		
++		bool all_rems_passed = true;
++		for (int i = 0; i < REM_COUNT; i++) {
++			if (token.cvm_token.rem[i].len != sizeof(rem_t)) {
++				RTLS_ERR("Invalid REM[%d] size in token\n", i);
++				ret = RATS_TLS_ERR_INVALID;
++				goto err;
++			}
++			
++			verify_single_rem(i, (rem_t*)token.cvm_token.rem[i].ptr, &event_log.rems[i]);
++			if (!rem_compare((rem_t*)token.cvm_token.rem[i].ptr, &event_log.rems[i])) {
++				all_rems_passed = false;
++			}
++		}
++		
++		if (!all_rems_passed) {
++			RTLS_ERR("REM verification failed\n");
++			ret = RATS_TLS_ERR_INVALID;
++			goto err;
++		}
++		
++		RTLS_INFO("All REM values verified successfully\n");
++		printf("\n=====================================\n");
++
+ 		/* Create firmware state */
+-		vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
++		firmware_log_state_t* state = firmware_log_state_create(&event_log);
+ 		if (!state) {
+ 			RTLS_ERR("Failed to create firmware state\n");
+ 			ret = RATS_TLS_ERR_INVALID;
+@@ -533,22 +502,22 @@ int rats_tls_client_startup(client_args *args)
+ 		}
+ 
+ 		/* Extract firmware state */
+-		if (!vcca_firmware_log_state_extract(&event_log, state)) {
++		if (!firmware_log_state_extract(&event_log, state)) {
+ 			RTLS_ERR("Failed to extract firmware state\n");
+-			vcca_firmware_log_state_free(state);
++			firmware_log_state_free(state);
+ 			ret = RATS_TLS_ERR_INVALID;
+ 			goto err;
+ 		}
+ 
+ 		/* Verify firmware state */
+-		if (!verify_firmware_state_local(static_args.ref_json_file, state)) {
++		if (!verify_firmware_state(static_args.ref_json_file, state)) {
+ 			RTLS_ERR("Firmware state verification failed\n");
+-			vcca_firmware_log_state_free(state);
++			firmware_log_state_free(state);
+ 			ret = RATS_TLS_ERR_INVALID;
+ 			goto err;
+ 		}
+ 
+-		vcca_firmware_log_state_free(state);
++		firmware_log_state_free(state);
+ 		RTLS_INFO("Firmware verification completed successfully\n\n");
+ 	}
+ 
+@@ -694,75 +663,6 @@ static int request_and_save_firmware_data(rats_tls_handle handle)
+ 	return RATS_TLS_ERR_NONE;
+ }
+ 
+-/* New function: Verify firmware state */
+-static bool verify_firmware_state_local(const char* json_file, const vcca_firmware_log_state_t* state)
+-{
+-    if (!json_file || !state) {
+-        return false;
+-    }
+-
+-    firmware_reference_t ref = {0};
+-    bool result = false;
+-
+-    /* Parse JSON file */
+-    if (!parse_json_file(json_file, &ref)) {
+-        printf("Error: Failed to parse JSON file\n");
+-        return false;
+-    }
+-
+-    printf("\nVerifying firmware components...\n");
+-
+-    /* Verify EFI state (grub) */
+-    if (state->efi && state->efi->image_count > 0) {
+-        bool found_match = false;
+-        for (uint32_t i = 0; i < state->efi->image_count; i++) {
+-            if (compare_and_print_hash("GRUB", ref.grub,
+-                state->efi->images[i].image_hash,
+-                state->efi->images[i].image_hash_size)) {
+-                found_match = true;
+-                break;
+-            }
+-        }
+-        if (!found_match) {
+-            goto cleanup;
+-        }
+-    }
+-
+-    /* Verify GRUB configuration */
+-    if (state->grub && state->grub->config_hash) {
+-        if (!compare_and_print_hash("GRUB config", ref.grub_cfg,
+-            state->grub->config_hash,
+-            state->grub->config_hash_size)) {
+-            goto cleanup;
+-        }
+-    }
+-
+-    /* Verify kernel and initramfs */
+-    if (state->linux_kernel) {
+-        if (state->linux_kernel->kernel_hash) {
+-            if (!compare_and_print_hash("Kernel", ref.kernel,
+-                state->linux_kernel->kernel_hash,
+-                state->linux_kernel->kernel_hash_size)) {
+-                goto cleanup;
+-            }
+-        }
+-        if (state->linux_kernel->initrd_hash) {
+-            if (!compare_and_print_hash("Initramfs", ref.initramfs,
+-                state->linux_kernel->initrd_hash,
+-                state->linux_kernel->initrd_hash_size)) {
+-                goto cleanup;
+-            }
+-        }
+-    }
+-
+-    printf("\nAll firmware components verification passed\n\n");
+-    result = true;
+-
+-cleanup:
+-    free_firmware_reference(&ref);
+-    return result;
+-}
+-
+ static void print_hex_dump_with_ascii(const uint8_t* data, size_t length)
+ {
+     char ascii_buf[17] = {0};
+@@ -849,14 +749,14 @@ static int handle_eventlogs_command(void)
+         return 1;
+     }
+ 
+-    vcca_event_log_t event_log;
+-    if (!vcca_event_log_init(&event_log, (size_t)table_info.log_address, (size_t)table_info.log_length)) {
++    event_log_t event_log;
++    if (!event_log_init(&event_log, (size_t)table_info.log_address, (size_t)table_info.log_length)) {
+         printf("Error: Failed to initialize event log\n");
+         free(ccel_data);
+         return 1;
+     }
+ 
+-    vcca_event_log_dump(&event_log);
++    event_log_dump(&event_log);
+ 
+     free(ccel_data);
+     return 0;
+@@ -874,21 +774,9 @@ int main(int argc, char **argv)
+ }
+ 
+ /* Helper function declarations */
+-static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str);
+ static char* extract_json_string(const char* json, const char* key);
+-static bool parse_json_file(const char* filename, firmware_reference_t* ref);
+-static void free_firmware_reference(firmware_reference_t* ref);
+-static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
+-                                 const uint8_t* actual_hash, size_t hash_size);
+ static int parse_input_args(int argc, char **argv, client_args *args);
+ 
+-/* Implementation of helper functions */
+-static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
+-{
+-    for (size_t i = 0; i < len; i++) {
+-        sprintf(hex_str + (i * 2), "%02x", bytes[i]);
+-    }
+-}
+ 
+ static char* extract_json_string(const char* json, const char* key)
+ {
+@@ -915,57 +803,6 @@ static char* extract_json_string(const char* json, const char* key)
+     return value;
+ }
+ 
+-static bool parse_json_file(const char* filename, firmware_reference_t* ref)
+-{
+-    if (!filename || !ref) {
+-        return false;
+-    }
+-
+-    size_t file_size;
+-    char* json_content = read_text_file(filename, &file_size);
+-    if (!json_content) {
+-        return false;
+-    }
+-
+-    ref->grub = extract_json_string(json_content, "grub");
+-    ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
+-    ref->kernel = extract_json_string(json_content, "kernel");
+-    ref->initramfs = extract_json_string(json_content, "initramfs");
+-    ref->hash_alg = extract_json_string(json_content, "hash_alg");
+-
+-    free(json_content);
+-    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
+-}
+-
+-static void free_firmware_reference(firmware_reference_t* ref)
+-{
+-    if (!ref) {
+-        return;
+-    }
+-    free(ref->grub);
+-    free(ref->grub_cfg);
+-    free(ref->kernel);
+-    free(ref->initramfs);
+-    free(ref->hash_alg);
+-}
+-
+-static bool compare_and_print_hash(const char* component_name, const char* ref_hash,
+-                                 const uint8_t* actual_hash, size_t hash_size)
+-{
+-    if (!ref_hash || !actual_hash) {
+-        return false;
+-    }
+-    
+-    char actual_hex[HASH_STR_LENGTH + 1] = {0};
+-    bytes_to_hex_string(actual_hash, hash_size, actual_hex);
+-    
+-    bool match = (strncmp(ref_hash, actual_hex, HASH_STR_LENGTH) == 0);
+-    printf("\n%s verification %s\n", component_name, match ? "passed" : "failed");
+-    printf("Expected: %s\n", ref_hash);
+-    printf("Got:      %s\n", actual_hex);
+-    return match;
+-}
+-
+ static int parse_input_args(int argc, char **argv, client_args *args)
+ {
+     int opt;
+diff --git a/samples/virtcca-client/rem.c b/samples/virtcca-client/rem.c
+index 5e2becc..b98fd6e 100644
+--- a/samples/virtcca-client/rem.c
++++ b/samples/virtcca-client/rem.c
+@@ -21,7 +21,6 @@ void rem_dump(const rem_t* rem)
+         return;
+     }
+     
+-    printf("REM Value: ");
+     for (int i = 0; i < REM_LENGTH_BYTES; i++) {
+         printf("%02x", rem->data[i]);
+     }
+diff --git a/samples/virtcca-client/verify.c b/samples/virtcca-client/verify.c
+index 1c90852..6320225 100644
+--- a/samples/virtcca-client/verify.c
++++ b/samples/virtcca-client/verify.c
+@@ -6,8 +6,8 @@
+ #include <ctype.h>
+ #include "config.h"
+ #include "binary_blob.h"
+-#include "vcca_event_log.h"
+-#include "vcca_firmware_state.h"
++#include "event_log.h"
++#include "firmware_state.h"
+ #include "verify.h"
+ 
+ /* Length of REM value read from rem.txt file (each value is 32 bytes, represented as 64 hex characters) */
+@@ -104,6 +104,10 @@ void verify_single_rem(int rem_index, const rem_t* rem1, const rem_t* rem2)
+ 
+     if (rem_compare(rem1, rem2)) {
+         printf("REM[%d] passed the verification.\n", rem_index);
++        printf("Expected: ");
++        rem_dump(rem1);
++        printf("Got:      ");
++        rem_dump(rem2);
+     } else {
+         printf("REM[%d] did not pass the verification\n", rem_index);
+         printf("Expected: ");
+@@ -113,7 +117,7 @@ void verify_single_rem(int rem_index, const rem_t* rem1, const rem_t* rem2)
+     }
+ }
+ 
+-bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_t* state)
++bool verify_firmware_state(const char* json_file, const firmware_log_state_t* state)
+ {
+     if (!json_file || !state) {
+         return false;
+@@ -161,21 +165,51 @@ bool verify_firmware_state(const char* json_file, const vcca_firmware_log_state_
+         }
+     }
+ 
+-    /* Verify kernel and initramfs */
++    /* Verify kernel and initramfs - match any kernel version */
+     if (state->linux_kernel) {
+-        if (state->linux_kernel->kernel_hash) {
+-            if (!compare_and_print_hash("Kernel", ref.kernel,
+-                state->linux_kernel->kernel_hash,
+-                state->linux_kernel->kernel_hash_size)) {
+-                goto cleanup;
++        bool kernel_match = false;
++        
++        /* Try to match against any kernel version in the reference */
++        for (int i = 0; i < ref.kernel_count; i++) {
++            bool version_match = true;
++            
++            /* Check kernel hash if available */
++            if (state->linux_kernel->kernel_hash) {
++                if (!ref.kernels[i].kernel) {
++                    printf("FAILED: Kernel hash exists but reference is missing\n");
++                    version_match = false;
++                } else if (!compare_and_print_hash("Kernel", ref.kernels[i].kernel,
++                    state->linux_kernel->kernel_hash,
++                    state->linux_kernel->kernel_hash_size)) {
++                    version_match = false;
++                }
+             }
+-        }
+-        if (state->linux_kernel->initrd_hash) {
+-            if (!compare_and_print_hash("Initramfs", ref.initramfs,
+-                state->linux_kernel->initrd_hash,
+-                state->linux_kernel->initrd_hash_size)) {
+-                goto cleanup;
++            
++            /* Check initramfs hash if available */
++            if (version_match && state->linux_kernel->initrd_hash) {
++                if (!ref.kernels[i].initramfs) {
++                    printf("FAILED: Initramfs hash exists but reference is missing\n");
++                    version_match = false;
++                } else if (!compare_and_print_hash("Initramfs", ref.kernels[i].initramfs,
++                    state->linux_kernel->initrd_hash,
++                    state->linux_kernel->initrd_hash_size)) {
++                    version_match = false;
++                }
+             }
++            
++            /* If this version matches, we're done */
++            if (version_match) {
++                if (ref.kernels[i].version) {
++                    printf("Matched kernel version: %s\n", ref.kernels[i].version);
++                }
++                kernel_match = true;
++                break;
++            }
++        }
++        
++        /* If no kernel matched, verification fails */
++        if (!kernel_match) {
++            goto cleanup;
+         }
+     }
+ 
+@@ -187,91 +221,6 @@ cleanup:
+     return result;
+ }
+ 
+-bool verify_rem(void)
+-{
+-    printf("=> Verify REM\n");
+-    /* 1. Read CCEL file */
+-    size_t file_size;
+-    uint8_t* ccel_data = read_file_data(g_config.ccel_file, &file_size);
+-    if (!ccel_data) {
+-        return false;
+-    }
+-
+-    /* 2. Get the start address and length of event log area from CCEL */
+-    /* The processing is simplified here. The CCEL structure should be parsed. */
+-    size_t log_area_start = 0;  /* Actually read from CCEL */
+-    size_t log_area_length = 0;
+-
+-    /* 3. Initialize event log processor */
+-    vcca_event_log_t event_log;
+-    if (!vcca_event_log_init(&event_log, log_area_start, log_area_length)) {
+-        free(ccel_data);
+-        return false;
+-    }
+-
+-    /* 4. Replay event log to calculate REM values */
+-    if (!vcca_event_log_replay(&event_log)) {
+-        free(ccel_data);
+-        return false;
+-    }
+-
+-    /* 5. Read REM values from attestation token */
+-    rem_t token_rems[REM_COUNT];
+-    if (!read_token_rem(token_rems)) {
+-        printf("Error: Could not read REM file: %s\n", g_config.rem_file);
+-        free(ccel_data);
+-        return false;
+-    }
+-
+-    /* 6. Verify each REM value */
+-    printf("\nVerifying REM values...\n");
+-    bool all_rems_passed = true;
+-    for (int i = 0; i < REM_COUNT; i++) {
+-        verify_single_rem(i, &token_rems[i], &event_log.rems[i]);
+-        if (!rem_compare(&token_rems[i], &event_log.rems[i])) {
+-            all_rems_passed = false;
+-        }
+-    }
+-
+-    if (!all_rems_passed) {
+-        printf("\nREM verification failed, skipping firmware state verification\n");
+-        free(ccel_data);
+-        return false;
+-    }
+-
+-    printf("\nAll REM values verified successfully\n");
+-
+-    /* 7. If JSON file is provided and REM verification passed, verify firmware state */
+-    bool final_result = true;
+-    if (g_config.json_file) {
+-        printf("\nVerifying firmware state...\n");
+-        vcca_firmware_log_state_t* state = vcca_firmware_log_state_create(&event_log);
+-        if (!state) {
+-            printf("Error: Failed to create firmware state\n");
+-            free(ccel_data);
+-            return false;
+-        }
+-
+-        if (!vcca_firmware_log_state_extract(&event_log, state)) {
+-            printf("Error: Failed to extract firmware state\n");
+-            vcca_firmware_log_state_free(state);
+-            free(ccel_data);
+-            return false;
+-        }
+-
+-        if (!verify_firmware_state(g_config.json_file, state)) {
+-            printf("Error: Firmware state verification failed\n");
+-            vcca_firmware_log_state_free(state);
+-            free(ccel_data);
+-            final_result = false;
+-        }
+-
+-        vcca_firmware_log_state_free(state);
+-    }
+-
+-    free(ccel_data);
+-    return final_result;
+-}
+ 
+ /* Helper function: Convert byte array to hex string */
+ static void bytes_to_hex_string(const uint8_t* bytes, size_t len, char* hex_str)
+@@ -320,14 +269,76 @@ static bool parse_json_file(const char* filename, firmware_reference_t* ref)
+         return false;
+     }
+ 
++    /* Initialize kernels array */
++    ref->kernels = NULL;
++    ref->kernel_count = 0;
++
+     ref->grub = extract_json_string(json_content, "grub");
+     ref->grub_cfg = extract_json_string(json_content, "grub.cfg");
+-    ref->kernel = extract_json_string(json_content, "kernel");
+-    ref->initramfs = extract_json_string(json_content, "initramfs");
+     ref->hash_alg = extract_json_string(json_content, "hash_alg");
++    
++    /* Parse kernels array */
++    char* kernels_start = strstr(json_content, "\"kernels\":");
++    if (kernels_start) {
++        kernels_start = strchr(kernels_start, '[');
++        if (kernels_start) {
++            char* kernels_end = strchr(kernels_start, ']');
++            if (kernels_end) {
++                /* Count number of kernel objects */
++                char* ptr = kernels_start;
++                while (ptr < kernels_end) {
++                    if (*ptr == '{') {
++                        ref->kernel_count++;
++                    }
++                    ptr++;
++                }
++                
++                if (ref->kernel_count > 0) {
++                    /* Allocate memory for kernel objects */
++                    ref->kernels = (kernel_version_t*)calloc(ref->kernel_count, sizeof(kernel_version_t));
++                    if (!ref->kernels) {
++                        goto error;
++                    }
++                    
++                    /* Extract each kernel object */
++                    int idx = 0;
++                    ptr = kernels_start;
++                    while (ptr < kernels_end && idx < ref->kernel_count) {
++                        ptr = strchr(ptr, '{');
++                        if (!ptr || ptr >= kernels_end) break;
++                        
++                        char* obj_end = strchr(ptr, '}');
++                        if (!obj_end || obj_end >= kernels_end) break;
++                        
++                        /* Extract temporary JSON object */
++                        size_t obj_len = obj_end - ptr + 1;
++                        char* obj_json = (char*)malloc(obj_len + 1);
++                        if (!obj_json) break;
++                        
++                        strncpy(obj_json, ptr, obj_len);
++                        obj_json[obj_len] = '\0';
++                        
++                        /* Parse kernel version object */
++                        ref->kernels[idx].version = extract_json_string(obj_json, "version");
++                        ref->kernels[idx].kernel = extract_json_string(obj_json, "kernel");
++                        ref->kernels[idx].initramfs = extract_json_string(obj_json, "initramfs");
++                        
++                        free(obj_json);
++                        idx++;
++                        ptr = obj_end + 1;
++                    }
++                }
++            }
++        }
++    }
++    
++    free(json_content);
++    return (ref->grub && ref->grub_cfg && ref->hash_alg && ref->kernel_count > 0);
+ 
++error:
+     free(json_content);
+-    return (ref->grub && ref->grub_cfg && ref->kernel && ref->initramfs && ref->hash_alg);
++    free_firmware_reference(ref);
++    return false;
+ }
+ 
+ /* Helper function: Free JSON parsing results */
+@@ -338,9 +349,19 @@ static void free_firmware_reference(firmware_reference_t* ref)
+     }
+     free(ref->grub);
+     free(ref->grub_cfg);
+-    free(ref->kernel);
+-    free(ref->initramfs);
+     free(ref->hash_alg);
++    
++    /* Free kernel version data */
++    if (ref->kernels) {
++        for (int i = 0; i < ref->kernel_count; i++) {
++            free(ref->kernels[i].version);
++            free(ref->kernels[i].kernel);
++            free(ref->kernels[i].initramfs);
++        }
++        free(ref->kernels);
++        ref->kernels = NULL;
++    }
++    ref->kernel_count = 0;
+ }
+ 
+ /* Helper function: Compare hash value and print result */
+diff --git a/samples/virtcca-server/rats-server.c b/samples/virtcca-server/rats-server.c
+index 9c4ebe0..e30bd58 100644
+--- a/samples/virtcca-server/rats-server.c
++++ b/samples/virtcca-server/rats-server.c
+@@ -433,7 +433,7 @@ err:
+ 
+ int main(int argc, char **argv)
+ {
+-	char *const short_options = "a:v:t:c:mel:i:p:kh";
++	char *const short_options = "a:v:t:c:mel:i:p:h";
+ 
+         struct option long_options[] = {
+                 { "attester", required_argument, NULL, 'a' },
+@@ -445,7 +445,6 @@ int main(int argc, char **argv)
+                 { "log-level", required_argument, NULL, 'l' },
+                 { "ip", required_argument, NULL, 'i' },
+                 { "port", required_argument, NULL, 'p' },
+-				{ "fdekey", no_argument, NULL, 'k'},
+                 { "help", no_argument, NULL, 'h' },
+                 { 0, 0, 0, 0 }
+         };
+@@ -503,9 +502,6 @@ int main(int argc, char **argv)
+ 		case 'p':
+ 			port = atoi(optarg);
+ 			break;
+-		case 'k':
+-            use_fde = true;
+-            break;
+ 		case -1:
+ 			break;
+ 		case 'h':
+@@ -522,7 +518,6 @@ int main(int argc, char **argv)
+ 			     "        --log-level/-l        set the log level\n"
+ 			     "        --ip/-i               set the listening ip address\n"
+ 			     "        --port/-p             set the listening tcp port\n"
+-				 "        --fdekey/-k           enable Full Disk Encryption with rootfs key file\n"
+ 			     "        --help/-h             show the usage\n");
+ 			exit(1);
+ 			/* Avoid compiling warning */
+-- 
+2.45.1.windows.1
+
