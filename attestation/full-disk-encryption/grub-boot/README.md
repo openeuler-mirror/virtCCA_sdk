@@ -59,7 +59,7 @@ The usage of `create_fde_image.sh` is as follows:
 Script `create_fde_image.sh` will encrypt the root filesystem with the encryption key. It will create a dracut module called `fde` and install FDE releated components into the initrd, such as attestation app `virtcca-server`, FDE agent `fde-agent.sh` and crypt binary `cryptsetup`. The kernel cmdline is appened with the parameter `root=/dev/mapper/encroot`, which represents the encrypted rootfs partition. Also `/etc/fstab` is updated to append the above parameter to auto-mount encrypted rootfs. 
 
 
-Since grub configuration file (e.g., `grub.cfg`) and initramfs image is changed, Script `create_fde_image.sh` will update the reference measurements (e.g., `hash.json`) and copy it into `${FDE_DIR}/attestation/${ATTEST_CASE}` for attestation.
+Since grub configuration file (e.g., `grub.cfg`) and initramfs image is changed, Script `create_fde_image.sh` will update the reference measurements (e.g., `image_reference_measurement.json`) and copy it into `${FDE_DIR}/attestation/${ATTEST_CASE}` for attestation.
 
 Default output image is `${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2`, and the disk partition is as follows.
 
@@ -85,7 +85,7 @@ Script `fde-agent.sh` in the initrd will run `/usr/bin/virtcca-server -i ${IP_AD
 
 ```shell
 cd ${FDE_DIR}/attestation/${ATTEST_CASE}
-./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f hash.json -k rootfs_key.bin 
+./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f image_reference_measurement.json -k rootfs_key.bin 
 ```
 
 Note: `<measurement>` denotes the reference initial measurement of CVM, which is computed by `gen_rim_ref` tool (see `virtCCA_sdk/attestation/rim_ref'). When `ATTEST_CASE=rats-tls` please input `-r <measurement>` in the above command.

@@ -35,12 +35,12 @@ cd ${FDE_DIR}/image
 sh create-fde-image.sh -i <input image> -g <image measurement reference> -o <output image> -a ${ATTEST_CASE}
 ```
 >-   -i ：表示cVM镜像。
->-   -g ：表示cVM镜像组件（grub镜像、grub.cfg 文件、Kernel镜像、initramfs镜像）的参考度量值文件。
+>-   -g ：表示cVM镜像（grub镜像、grub.cfg 文件、Kernel镜像、initramfs镜像）度量基线值文件。
 >-   -o ：可选参数，用于指定cVM镜像的输出路径。
 >-   -a ：输入samples 或者 rats-tls 来选择不同的远程证明示例。
 
 -   脚本`create-fde-image.sh`将使用加密密钥加密根文件系统，它会创建一个名为`fde`的`dracut`模块，并将`FDE`相关组件例如远程证明程序`virtcca-server`、FDE代理`fde-agent.sh`和加密工具`cryptsetup`安装到`initramfs`中。内核启动参数会追加`root=/dev/mapper/encroot`（表示加密的根文件系统分区），同时更新`/etc/fstab`以自动挂载加密根分区。
--   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新参考度量值（如 `hash.json`）并将其复制到`${FDE_DIR}/attestation/${ATTEST_CASE}`目录。
+-   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新cVM镜像度量基线值文件（如 `image_reference_measurement.json`）并将其复制到`${FDE_DIR}/attestation/${ATTEST_CASE}`目录。
 -   默认输出镜像为`${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2`，其磁盘分区如下。
    ![](./doc/disk-partition.png)
     >加密后的根分区/dev/vda2通过LUKS保护。
@@ -61,9 +61,9 @@ sh create-fde-image.sh -i <input image> -g <image measurement reference> -o <out
 3.  virtcca-client向virtcca-server发起请求，获取度量报告， 在度量报告验证通过后， 再将加密密钥发送到`virtcca-server`。
     ```bash
     cd ${FDE_DIR}/attestation/${ATTEST_CASE}
-    ./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f hash.json -k rootfs_key.bin 
+    ./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f image_reference_measurement.json -k rootfs_key.bin 
     ```
-    >其中`<measurement>`为cVM初始度量值的参考值，是由`gen_rim_ref`（详见 `virtCCA_sdk/attestion/rim_refi`） 工具生成。当`ATTEST_CASE=rats-tls`请输入 `-r <measurement>`。 
+    >其中`<measurement>`为cVM初始度量基线值，是由`gen_rim_ref`（详见 `virtCCA_sdk/attestion/rim_refi`） 工具生成。当`ATTEST_CASE=rats-tls`请输入 `-r <measurement>`。 
 4.  脚本`fde-agent.sh`会自动执行如下命令，使用加密密钥解密根文件系统并挂载。
     ```bash
     cryptsetup open /dev/vda2 encroot --key-file /root/rootfs_key.bin 
