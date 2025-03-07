@@ -21,24 +21,6 @@
 
 bool use_fde = false;
 
-int save_file_data(const char *file_name, unsigned char *file_data, size_t file_size)
-{
-    FILE *file = fopen(file_name, "wb");
-    if (file == NULL) {
-        printf("Failed to open file %s\n", file_name);
-        return 1;
-    }
-
-    size_t byte_write = fwrite(file_data, 1, file_size, file);
-    if (byte_write != file_size) {
-        printf("Failed to write opened file");
-        (void) fclose(file);
-        return 1;
-    }
-
-    (void) fclose(file);
-    return 0;
-}
 
 int handle_connect(int connfd, tsi_ctx *ctx)
 {
