@@ -145,6 +145,9 @@ cat > "${FDE_DIR}/cmdline.sh" << "EOF"
 #!/bin/bash
 set -e
 
+# Install required packages for cVM
+dnf install -y cryptsetup
+
 # Declare the grub configuration file
 CFG_FILE=/boot/efi/EFI/openEuler/grub.cfg
 # Update grub.cfg in place: 
