@@ -1,99 +1,71 @@
-# virtCCA Full Disk Encryption
+# 全盘加密
 
-Full Disk Encryption (FDE) is a security technique designed to safeguard sensitive information by encrypting the entire contents of a disk partition. In standard virtual machines that do not operate in confidential environments, FDE typically employs LUKS (Linux Unified Key Setup) along with a user-provided encryption key. However, in trust execution environments such as Huawei virtCCA, the encryption key must be securely obtained from a attestation service rather than relying on direct user input.
+全盘加密（Full Disk Encryption, FDE ）是一种通过加密整个磁盘分区来保护敏感信息的安全技术。在非机密计算环境中，`FDE`通常基于`LUKS`（`Linux` 统一密钥设置）和用户提供的密钥实现。然而，在`virtCCA`这类基于`TrustZone`的机密计算架构中，加密密钥需要通过认证服务（attestation service） 安全获取，而非直接依赖用户输入。
 
-**Note: The default FDE solution is just a reference implementation. If you use other remote service, please adapt scripts in the below sections carefully.**
+**注意：默认的FDE解决方案只是一个参考实现。如果您使用其他远程服务，请仔细调整以下部分中的脚本。** 
 
-
-## Architecture
-
+## 架构
 ![](./doc/fde-arch.png)
+本节描述将`FDE`与华为`virtCCA`集成的实现步骤，主要分为三个阶段。
+1.  构建本地验证器的用户环境，并生成镜像加密的密钥文件。
+2.  使用密钥文件创建加密的`cVM`镜像，并将`FDE`组件安装到其初始内存文件系统（`initramfs`）中。
+3.  通过`early-boot` `FDE`启动基于加密镜像的`cVM`。
 
-This section outlines a implementation for integrating FDE with Huawei virtCCA, structured into three steps.
+## 准备本地验证器与加密密钥
 
-1. Build the user environment for local verifier and generate a key file for image encryption.
+FDE代码位于目录`FDE_DIR=virtCCA_sdk/attestation/full-disk-encryption/grub-boot`中。
 
-2. Create an encrypted CVM image with the key file and install FDE components into its initramfs.
+FDE参考实现提供了两种远程证明示例:`virtCCA_sdk/attestation/samples` 和 `virtCCA_sdk/attestation/rats-tls`,两者的区别在于`rats-tls`具有更安全的TLS通信。
 
-3. Launch a CVM based on the encrypted image through early-boot FDE workflow.
-
-## Prepare local verifier and encryption key
-
-The FDE codes is located in the `FDE_DIR=virtCCA_sdk/attestation/full-disk-encryption/grub-boot` directory.
-
-**Note: we provide two attestation cases for this FDE implementation: `virtCCA_sdk/attestation/samples` and `virtCCA_sdk/attestation/rats-tls`, samples is a reference implementation (without TLS) of virtCCA attestation, while rats-tls is RATS architecture based TLS using librats.**
-
-```shell
+```
 cd ${FDE_DIR}/attestation
 sh pre-fde.sh -a <samples or rats-tls>
 ```
+>-  -a ：输入samples 或者 rats-tls 来选择不同的远程证明示例，如`export ATTEST_CASE=samples`。
 
-The usage of `pre-fde.sh` is as follows:
+-   脚本`pre-fde.sh`会检查远程证明所需的`virtcca-client`和`virtcca-server`是否存在。若不存在，则会重新编译`virtCCA_sdk/attestation/sdk`和远程证明示例，并将远程证明程序复制到当前目录。
+-   脚本`pre-fde.sh`还会检查镜像加密的密钥文件是否存在，若不存在，则会在当前目录重新生成密钥文件。
 
-```shell
-  -a <attest case>: please input samples or rats-tls to specify local verifier for attestation, e.g., if input samples then `ATTEST_CASE=samples`.
+## 创建加密的cVM镜像
+
+构建并验证`openEuler 24.03 LTS SP1`的cVM加密镜像。
+
 ```
-
-Script `pre-fde.sh` will check the existence of `virtcca-client` and `virtcca-server` used for attestation. If absent, it will re-compile the `virtCCA_sdk/attestation/sdk` and `virtCCA_sdk/attestation/${ATTEST_CASE}`, then copy attestation apps to the current directory.
-
-Script `pre-fde.sh` will check the existence of key file for image encryption. If absent, it will re-generate the key file in the current directory.
-
-## Create encrypted CVM image
-
-We build the openEuler 24.03 LTS SP1 CVM image and validate it. 
-
-```shell
 cd ${FDE_DIR}/image
-sh create_fde_image.sh -i <input image> -g <image measurement reference> -o <output image> -a ${ATTEST_CASE}
+sh create-fde-image.sh -i <input image> -g <image measurement reference> -o <output image> -a ${ATTEST_CASE}
 ```
+>-   -i ：表示cVM镜像。
+>-   -g ：表示cVM镜像（grub镜像、grub.cfg 文件、Kernel镜像、initramfs镜像）度量基线值文件。
+>-   -o ：可选参数，用于指定cVM镜像的输出路径。
+>-   -a ：输入samples 或者 rats-tls 来选择不同的远程证明示例。
 
-The usage of `create_fde_image.sh` is as follows:
+-   脚本`create-fde-image.sh`将使用加密密钥加密根文件系统，它会创建一个名为`fde`的`dracut`模块，并将`FDE`相关组件例如远程证明程序`virtcca-server`、FDE代理`fde-agent.sh`和加密工具`cryptsetup`安装到`initramfs`中。内核启动参数会追加`root=/dev/mapper/encroot`（表示加密的根文件系统分区），同时更新`/etc/fstab`以自动挂载加密根分区。
+-   由于`GRUB`配置文件（如 `grub.cfg`）和`initramfs`镜像被修改，因此脚本会更新cVM镜像度量基线值文件（如 `image_reference_measurement.json`）并将其复制到`${FDE_DIR}/attestation/${ATTEST_CASE}`目录。
+-   默认输出镜像为`${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2`，其磁盘分区如下。
+   ![](./doc/disk-partition.png)
+    >加密后的根分区/dev/vda2通过LUKS保护。
 
-```shell
-  -i <input image>: the initial CVM image file
-  -g <image measurement reference>: the measurement reference file of CVM image, including grub image, grub.cfg file, kernel image and initramfs image 
-  -a <attestation case>: the local verifier for attestation (samples or rats-tls) 
-  -o <output image>: default is ${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2
-```
+## 基于early-boot FDE启动cVM
+当cVM启动进入initramfs阶段时，终端会输出IP地址和端口。
+1.  用户根据cVM的输出日志，在宿主机`terminal`中执行如下命令，用来保存IP地址和端口号。
 
-Script `create_fde_image.sh` will encrypt the root filesystem with the encryption key. It will create a dracut module called `fde` and install FDE releated components into the initrd, such as attestation app `virtcca-server`, FDE agent `fde-agent.sh` and crypt binary `cryptsetup`. The kernel cmdline is appened with the parameter `root=/dev/mapper/encroot`, which represents the encrypted rootfs partition. Also `/etc/fstab` is updated to append the above parameter to auto-mount encrypted rootfs. 
+    ```bash
+    export IP_ADDR=192.168.122.150 # ip地址根据实际情况修改
+    export PORT=7220
+    ```
+2.  `initramfs`中的脚本`fde-agent.sh`会自动执行如下命令, 该命令会通过TMM服务接口获取度量报告（`attestation token`）， 并等待`virtcca-client`的请求。
 
-
-Since grub configuration file (e.g., `grub.cfg`) and initramfs image is changed, Script `create_fde_image.sh` will update the reference measurements (e.g., `image_reference_measurement.json`) and copy it into `${FDE_DIR}/attestation/${ATTEST_CASE}` for attestation.
-
-Default output image is `${FDE_DIR}/image/virtcca-cvm-openeuler-24.03-encrypted.qcow2`, and the disk partition is as follows.
-
-![](./doc/disk-partition.png)
-
-## Launch CVM by early-boot FDE flow
-
-When the CVM boot into initramfs phrase, the terminal will display CVM's IP address and `virtcca-server` program's port. The usrs may save these locally, for example:
-
-```shell
-# Need to change based on info of CVM terminal
-export IP_ADDR=192.168.122.150 
-export PORT=7220
-```
-
-* Step 1: Get attestation token through TMM service interface;
-
-* Step 2: Request the encryption key with attestation token;
-
-Script `fde-agent.sh` in the initrd will run `/usr/bin/virtcca-server -i ${IP_ADDR} -p ${PORT} -k ` to achieve the above two steps.
-
-* Step 3: User validates attestation token with local verifier, and release encryption key;
-
-```shell
-cd ${FDE_DIR}/attestation/${ATTEST_CASE}
-./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f image_reference_measurement.json -k rootfs_key.bin 
-```
-
-Note: `<measurement>` denotes the reference initial measurement of CVM, which is computed by `gen_rim_ref` tool (see `virtCCA_sdk/attestation/rim_ref'). When `ATTEST_CASE=rats-tls` please input `-r <measurement>` in the above command.
-
-User need run the above command to finish Step 3.
-
-* Step 4: Run cryptsetup open with encryption key to decrypt rootfs, then mount rootfs.
-
-Script `fde-agent.sh` in the initrd will run `cryptsetup open /dev/vda2 encroot --key-file /root/rootfs_key.bin` to achieve the final Step.
-
-After CVM boots successfully, run `lsblk` will display the rootfs device with FDE.
+    ```bash
+    /usr/bin/virtcca-server -i ${IP_ADDR} -p ${PORT} -k
+    ```
+3.  virtcca-client向virtcca-server发起请求，获取度量报告， 在度量报告验证通过后， 再将加密密钥发送到`virtcca-server`。
+    ```bash
+    cd ${FDE_DIR}/attestation/${ATTEST_CASE}
+    ./virtcca-client -i ${IP_ADDR} -p ${PORT} -m <measurement> -f image_reference_measurement.json -k rootfs_key.bin 
+    ```
+    >其中`<measurement>`为cVM初始度量基线值，是由`gen_rim_ref`（详见 `virtCCA_sdk/attestion/rim_refi`） 工具生成。当`ATTEST_CASE=rats-tls`请输入 `-r <measurement>`。 
+4.  脚本`fde-agent.sh`会自动执行如下命令，使用加密密钥解密根文件系统并挂载。
+    ```bash
+    cryptsetup open /dev/vda2 encroot --key-file /root/rootfs_key.bin 
+    ```
+5.  启动完成后， 在`cVM`中执行`lsblk`，可看到挂载的加密存储设备encroot。
