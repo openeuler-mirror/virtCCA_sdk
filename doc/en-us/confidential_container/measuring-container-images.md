@@ -1,55 +1,55 @@
-# 容器镜像度量<a name="ZH-CN_TOPIC_0000002055827284"></a>
+# Measuring Container Images <a name="EN-US_TOPIC_0000002243530385"></a>
 
-当前容器镜像度量基于secGear项目的attestation-agent/attestation-service实现，且secGear暂未适配CoCo社区，因此当前容器度量暂不支持attestation-agent部署在guest OS的通用场景，当前attestation-agent以.so的形式打包在容器镜像中供度量测试程序调用。
+Container image measurement is implemented using the attestation agent and attestation service of the secGear project, and secGear has not been adapted to the CoCo community. Therefore, container image measurement does not support the common scenario where the attestation agent is deployed on the guest OS. Currently, the attestation agent is packaged as an SO file in the container image and is invoked by the measurement test program.
 
-## 前提条件<a name="section1797634684218"></a>
+## Prerequisites<a name="section1797634684218"></a>
 
--   建议在搭建有本地镜像仓的环境执行下述步骤，方便docker镜像制作和上传，有证明场景的as服务可以直接部署在本地镜像仓环境。
--   确保制作的rootfs完成了ima使能。 具体请参见[6.d](zh-cn_topic_0000002044440426.md#li1632006326)
--   确保guest component合入了使能ima的修改，并重新编译和部署kata-agent。具体请参见[重新编译并部署agent](机密容器部署运行.md#li168411548115316)。
+-   You have set up an environment where a local image repository is available. The following operations will be performed in this environment to facilitate Docker image creation and upload. The attestation service in attestation scenarios can be directly deployed in the local image repository.
+-   Ensure that IMA has been enabled for the created rootfs. For details, see  [6.d](en-us_topic_0000002044440426.md#li1632006326).
+-   Ensure that IMA has been enabled in the guest component and kata-agent has been recompiled and deployed. For details, see  [recompiling and deploying the agent](en-us_topic_0000002044282130.md#li168411548115316).
 
-## 准备工作<a name="section197821631172513"></a>
+## Preparations<a name="section197821631172513"></a>
 
-1.  执行以下命令进入“home“目录并下载secGear代码。
+1.  Go to the  **home**  directory and download the secGear code.
 
     ```
     cd /home
-    git clone --branch v1.0.0 https://gitee.com/openeuler/secGear.git
+    git clone https://gitee.com/openeuler/secGear.git
     ```
 
-2.  请参见[kata-shim编译和部署](机密容器部署运行.md#section425812386177)的[步骤2](机密容器部署运行.md#li363891994015)完成rust环境安装。
-3.  请参见[kata镜像拉取设置](容器镜像签名验签.md#section584474810210)使能kata-agent拉取容器镜像。
-4.  执行以下命令安装相关依赖。
+2.  Install the Rust environment by following instructions in  [Step 2](en-us_topic_0000002044282130.md#li363891994015)  of  [Compiling and Deploying kata-shim](en-us_topic_0000002044282130.md#section425812386177).
+3.  Enable kata-agent to pull container images by following instructions in  [Setting Kata Image Pulls](en-us_topic_0000002044282114.md#section584474810210).
+4.  Install the dependencies.
 
     ```
     yum install virtCCA_sdk-devel skopeo jq kunpengsecl-attester
     ```
 
-    >![](public_sys-resources/icon-note.gif) **说明：** 
-    >kunpengsecl-attester为attestation-server运行所需依赖，需安装在attestation-server所在运行环境。
+    >![](public_sys-resources/icon-note.gif) **NOTE:** 
+    >kunpengsecl-attester is required for running attestation-server and must be installed in the attestation-server running environment.
 
-5.  下载openEuler容器镜像并导入。
+5.  Download the openEuler container image and import it.
 
     ```
-    wget  http://repo.openeuler.org/openEuler-24.09/docker_img/aarch64/openEuler-docker.aarch64.tar.xz
+    wget  http://repo.openeuler.org/openEuler-24.03-LTS-SP1/docker_img/aarch64/openEuler-docker.aarch64.tar.xz
     docker load -i openEuler-docker.aarch64.tar.xz
     ```
 
-    >![](public_sys-resources/icon-note.gif) **说明：** 
-    >若wget失败，则将下载地址的http修改为https后再次尝试。
+    >![](public_sys-resources/icon-note.gif) **NOTE:** 
+    >If the wget operation fails, change  **HTTP**  in the download URL to  **HTTPS**  and try again.
 
-6.  创建容器repo文件，proxy代理用于Dockerfile创建镜像时下载依赖，环境直通公网则无需配置。
+6.  Create a container repo file. The proxy is used to download dependencies when using Dockerfile to create images. If the environment is connected to the Internet, you do not need to configure the proxy.
 
     ```
     vim openEuler.repo 
     ```
 
-    内容如下：
+    The file content is as follows:
 
     ```
     [everything]
     name=everything
-    baseurl=https://repo.openeuler.org/openEuler-24.09/everything/$basearch/
+    baseurl=https://repo.openeuler.org/openEuler-24.03-LTS-SP1/everything/$basearch/
     metalink=https://mirrors.openeuler.org/metalink?repo=$releasever/everything&arch=$basearch
     metadata_expire=1h
     enabled=1
@@ -57,26 +57,26 @@
     proxy=http://IP:PORT 
     ```
 
-7.  修改测试程序，启用获取ima度量报告。
+7.  Modify the test program to enable the function of obtaining IMA measurement reports.
 
     ```
     vim secGear/service/attestation/attestation-agent/c_header/example.c
     ```
 
-    启用ima参数初始化，将.\_1由**false**改为**true**。
+    Enable IMA parameter initialization and change the  **.\_1**  setting from  **false**  to  **true**.
 
     ```
     Tuple2_bool_bool_t ima = {  // define input ima = Some(true)
         ._0 = true,
-        ._1 = true,  // 默认false，修改为true启用获取ima报告
+        ._1 = true,  // The default value is false. Change it to true to enable the function of obtaining IMA reports.
     }; 
     ```
 
-    ![](figures/zh-cn_image_0000002091985857.png)
+    ![](figures/en-us_image_0000002208530550.png)
 
-## 无证明服务<a name="section188968121274"></a>
+## Without Attestation Service<a name="section188968121274"></a>
 
-1.  执行以下命令编译libattestation\_agent.so。
+1.  Compile  **libattestation\_agent.so**.
 
     ```
     cd secGear/service/attestation/attestation-agent
@@ -84,14 +84,14 @@
     cp target/release/libattestation_agent.so /lib64/ 
     ```
 
-2.  执行以下命令编译测试程序aa-test。
+2.  Compile the test program aa-test.
 
     ```
     cd c_header 
     gcc example.c -o aa-test -L. -lattestation_agent -lcrypto
     ```
 
-3.  创建配置文件。
+3.  Create a configuration file.
 
     ```
     mkdir -p /home/no_as/etc/attestation/attestation-agent/ 
@@ -105,30 +105,30 @@
     }
     ```
 
-4.  配置cvm基线值。
+4.  Configure the cVM base value.
 
-    请参见[2](机密容器远程证明.md#li18143447184411)获取待启动机密容器对应cvm的rim基线值并配置到下述ref\_value.json文件中。
+    Obtain the RIM base value of the cVM corresponding to the confidential container to be started \(following instructions in  [2](en-us_topic_0000002080359729.md#li18143447184411)\) and configure the value in the  **ref\_value.json**  file.
 
     ```
     mkdir -p /home/no_as/etc/attestation/attestation-agent/local_verifier/virtcca/
     vim /home/no_as/etc/attestation/attestation-agent/local_verifier/virtcca/ref_value.json
     ```
 
-5.  配置华为证书。
-    1.  下载Huawei Equipment Root CA.pem、Huawei IT Product CA.pem。
+5.  Configure the Huawei certificate.
+    1.  Download  **Huawei Equipment Root CA.pem**  and  **Huawei IT Product CA.pem**.
 
         ```
         https://download.huawei.com/dl/download.do?actionFlag=download&nid=PKI1000000002&partNo=3001&mid=SUP_PKI
         https://download.huawei.com/dl/download.do?actionFlag=download&nid=PKI1000000040&partNo=3001&mid=SUP_PKI 
         ```
 
-    2.  拷贝证书到目标路径。
+    2.  Copy the certificate to the target path.
 
         ```
         mv *.pem /home/no_as/etc/attestation/attestation-agent/local_verifier/virtcca/
         ```
 
-6.  拷贝文件到镜像制作目录。
+6.  Copy the file to the image creation directory.
 
     ```
     cd /home/no_as
@@ -137,11 +137,11 @@
     cp /home/openEuler.repo . 
     ```
 
-7.  创建Dockerfile。
+7.  Create a Dockerfile.
 
     ```
     vim Dockerfile
-    FROM openeuler-24.09
+    FROM openeuler-24.03-LTS-SP1
     COPY etc /etc/
     COPY libattestation_agent.so /lib64/
     COPY aa-test /home/
@@ -149,24 +149,24 @@
     RUN yum -y install compat-openssl11-libs 
     ```
 
-    >![](public_sys-resources/icon-note.gif) **说明：** 
-    >若自签名证书报错，则将openEuler.repo中的https改成http。
+    >![](public_sys-resources/icon-note.gif) **NOTE:** 
+    >If an error is reported for the self-signed certificate, change  **https**  in  **openEuler.repo**  to  **http**.
 
-8.  构建容器镜像并推送到本地镜像仓。
+8.  Build a container image and push it to the local image repository.
 
     ```
     docker build -t aa-test-no-as .
-    docker tag aa-test-no-as:latest registry.com:5000/aa-test-no-as
-    docker push registry.com:5000/aa-test-no-as
+    docker tag aa-test-no-as:latest registry.hw.com:5000/aa-test-no-as
+    docker push registry.hw.com:5000/aa-test-no-as
     ```
 
-9.  <a name="li174511711144919"></a>生成digest\_list\_file基线值。
+9.  <a name="li174511711144919"></a>Generate the base value in  **digest\_list\_file**.
 
     ```
-    skopeo inspect docker://registry.com:5000/aa-test-no-as | jq -r '.Layers[]' | sed 's/sha256://g' > digest_list_file
+    skopeo inspect docker://registry.hw.com:5000/aa-test-no-as | jq -r '.Layers[]' | sed 's/sha256://g' > digest_list_file
     ```
 
-10. 返回到运行cvm的环境，执行下方命令创建K8s的pod配置文件。
+10. Return to the cVM running environment and create the Kubernetes pod configuration file.
 
     ```
     vim test-no-as.yaml
@@ -178,7 +178,7 @@
       runtimeClassName: kata
       containers:
       - name: box
-         image: registry.com:5000/aa-test-no-as:latest
+         image: registry.hw.com:5000/aa-test-no-as:latest
          volumeMounts:
         - name: sys-volume
           mountPath: /sys
@@ -197,16 +197,16 @@
           type: Directory
     ```
 
-    >![](public_sys-resources/icon-note.gif) **说明：** 
-    >拷贝配置文件可能存在空格对齐格式问题，建议手动修改。
+    >![](public_sys-resources/icon-note.gif) **NOTE:** 
+    >The space alignment format may be corrupted when the configuration file is copied. You are advised to manually modify the configuration file.
 
-11. 创建pod。
+11. Create a pod.
 
     ```
     kubectl apply -f test-no-as.yaml
     ```
 
-12. 进入容器并配置digest\_list\_file。
+12. Access the container and configure  **digest\_list\_file**.
 
     ```
     kubectl exec -it no-as -c box -- /bin/sh
@@ -214,20 +214,20 @@
     vi /etc/attestation/attestation-agent/local_verifier/virtcca/ima/digest_list_file
     ```
 
-    手动拷贝[9](#li174511711144919)中digest\_list\_file中的内容到容器的digest\_list\_file。
+    Manually copy the content in the  **digest\_list\_file**  of  [9](#li174511711144919)  to the  **digest\_list\_file**  of the container.
 
-13. 启动镜像度量测试文件。
+13. Start the image measurement test file.
 
     ```
     cd /home
     ./aa-test
     ```
 
-    ![](figures/zh-cn_image_0000002055833032.png)
+    ![](figures/en-us_image_0000002208690354.png)
 
-## 有证明服务<a name="section1451916168522"></a>
+## With Attestation Service<a name="section1451916168522"></a>
 
-1.  编译libattestation\_agent.so。
+1.  Compile  **libattestation\_agent.so**.
 
     ```
     cd /home/secGear/service/attestation/attestation-agent
@@ -235,14 +235,14 @@
     cp target/release/libattestation_agent.so /lib64/ 
     ```
 
-2.  编译测试程序aa-test。
+2.  Compile the test program  **aa-test**.
 
     ```
     cd c_header 
     gcc example.c -o aa-test -L. -lattestation_agent -lcrypto
     ```
 
-3.  <a name="li2731946172114"></a>创建配置文件，其中ip端口为attestation-server运行环境的ip和端口。
+3.  <a name="li2731946172114"></a>Create a configuration file. The IP address and port are those of the attestation-server running environment.
 
     ```
     mkdir -p /home/as/etc/attestation/attestation-agent/ 
@@ -256,18 +256,17 @@
     }
     ```
 
-4.  生成 attestation service的私钥和自签名证书 。
+4.  Generate the private key and self-signed certificate of the attestation service.
 
     ```
     cd /home/as
     openssl genrsa -out private.pem 3072
-    openssl req -new -key private.pem -out server.csr # 一直回车即可
+    openssl req -new -key private.pem -out server.csr # Keep pressing Enter.
     openssl x509 -req -in server.csr -out as_cert.pem -signkey private.pem -days 3650
     cp as_cert.pem /home/as/etc/attestation/attestation-agent/
     ```
-    >![](public_sys-resources/icon-note.gif) **说明：** 
-    >-   当前开源框架secGear仅支持明文读取私钥，存在安全风险，请设置该文件读写权限
-5.  拷贝文件到镜像制作目录。
+
+5.  Copy the file to the image creation directory.
 
     ```
     cp /home/secGear/service/attestation/attestation-agent/target/release/libattestation_agent.so .
@@ -275,11 +274,11 @@
     cp /home/openEuler.repo .
     ```
 
-6.  创建Dockerfile。
+6.  Create a Dockerfile.
 
     ```
     vim Dockerfile
-    FROM openeuler-24.09
+    FROM openeuler-24.03-LTS-SP1
     COPY etc /etc/
     COPY libattestation_agent.so /lib64/
     COPY aa-test /home/
@@ -287,24 +286,24 @@
     RUN yum -y install compat-openssl11-libs 
     ```
 
-7.  构建容器镜像并推送到本地镜像仓。
+7.  Build a container image and push it to the local image repository.
 
     ```
     docker build -t aa-test-as .
-    docker tag aa-test-as:latest registry.com:5000/aa-test-as
-    docker push registry.com:5000/aa-test-as
+    docker tag aa-test-as:latest registry.hw.com:5000/aa-test-as
+    docker push registry.hw.com:5000/aa-test-as
     ```
 
-    >![](public_sys-resources/icon-note.gif) **说明：** 
-    >若自签名证书报错，则将openEuler.repo中的https改成http。
+    >![](public_sys-resources/icon-note.gif) **NOTE:** 
+    >If an error is reported for the self-signed certificate, change  **https**  in  **openEuler.repo**  to  **http**.
 
-8.  生成digest\_list\_file基线值。
+8.  Generate the base value in  **digest\_list\_file**.
 
     ```
-    skopeo inspect docker://registry.com:5000/aa-test-as | jq -r '.Layers[]' | sed 's/sha256://g' > digest_list_file
+    skopeo inspect docker://registry.hw.com:5000/aa-test-as | jq -r '.Layers[]' | sed 's/sha256://g' > digest_list_file
     ```
 
-9.  编译attestation service。
+9.  Compile the attestation service.
 
     ```
     cd /home/secGear/service/attestation/attestation-service
@@ -312,7 +311,7 @@
     cp target/release/attestation-service /usr/bin
     ```
 
-10. 创建attestation service配置文件。
+10. Create an attestation service configuration file.
 
     ```
     mkdir -p /etc/attestation/attestation-service/
@@ -330,51 +329,50 @@
     cp /home/as/private.pem /etc/attestation/attestation-service/token
     ```
 
-11. 配置华为证书。
-    1.  下载Huawei Equipment Root CA.pem、Huawei IT Product CA.pem。
+11. Configure the Huawei certificate.
+    1.  Download  **Huawei Equipment Root CA.pem**  and  **Huawei IT Product CA.pem**.
 
         ```
         https://download.huawei.com/dl/download.do?actionFlag=download&nid=PKI1000000002&partNo=3001&mid=SUP_PKI
         https://download.huawei.com/dl/download.do?actionFlag=download&nid=PKI1000000040&partNo=3001&mid=SUP_PKI 
         ```
 
-    2.  拷贝证书到目标路径。
+    2.  Copy the certificate to the target path.
 
         ```
         mkdir -p /etc/attestation/attestation-service/verifier/virtcca
         mv *.pem /etc/attestation/attestation-service/verifier/virtcca
         ```
 
-12. 启动attestation-service服务。
+12. Start the attestation service.
 
     ```
     /usr/bin/attestation-service -s IP:PORT
     ```
 
-    IP和PORT和[步骤3](#li2731946172114)中的配置保持一致。
+    The IP address and port are the same as those set in  [Step 3](#li2731946172114).
 
-13. 配置rim基线值到attestation-service。
+13. Configure the RIM base value to the attestation service.
 
-    请参见[2](机密容器远程证明.md#li18143447184411)获取待启动机密容器对应cvm的rim基线值并替换下述命令中vcca.cvm.rim的值。
+    Obtain the RIM base value of the cVM corresponding to the confidential container to be started \(following instructions in  [2](en-us_topic_0000002080359729.md#li18143447184411)\) and used the value to replace the value of  **vcca.cvm.rim**.
 
     ```
     curl -H "Content-Type:application/json" -X POST -d '{"refs":"{\"vcca.cvm.rim\":\"7d2e49c8d29f18b748e658e7243ecf26bc292e5fee93f72af11ad9da9810142a\"}"}' http://IP:PORT/reference
     ```
 
-14. 配置attestation-service默认策略。
+14. Configure the default attestation service policy.
 
     ```
     cp /home/secGear/service/attestation/attestation-service/policy/src/opa/default_vcca.rego /etc/attestation/attestation-service/policy/
     ```
 
-15. 配置ima基线文件digest\_list\_file。
+15. Configure the IMA baseline file  **digest\_list\_file**.
 
     ```
-    mkdir -p /etc/attestation/attestation-service/verifier/virtcca/ima/
     cp /home/as/digest_list_file /etc/attestation/attestation-service/verifier/virtcca/ima/
     ```
 
-16. 返回运行cvm的环境，创建K8s的pod配置文件。
+16. Return to the cVM running environment and create the Kubernetes pod configuration file.
 
     ```
     vim test-as.yaml
@@ -386,7 +384,7 @@
       runtimeClassName: kata
       containers:
       - name: box
-         image: registry.com:5000/aa-test-as:latest
+         image: registry.hw.com:5000/aa-test-as:latest
          volumeMounts:
         - name: sys-volume
           mountPath: /sys
@@ -405,31 +403,31 @@
           type: Directory
     ```
 
-17. 创建pod。
+17. Create a pod.
 
     ```
     kubectl apply -f test-as.yaml
     ```
 
-18. 进入容器并配置digest\_list\_file。
+18. Access the container and configure  **digest\_list\_file**.
 
     ```
     kubectl exec -it as -c box -- /bin/sh
     ```
 
-19. 启动镜像度量测试文件。
+19. Start the image measurement test file.
 
     ```
     cd /home
     ./aa-test
     ```
 
-## 容器镜像度量基线值生成工具<a name="section668582512314"></a>
+## Tool for Generating the Container Image Measurement Base Value<a name="section668582512314"></a>
 
--   工具接收1个参数，即待度量容器镜像地址。
--   工具输出2个文件，digest\_list\_file表示镜像分层文件哈希值列表，manifest.json以json格式输出镜像分层文件名列表。
+-   The tool receives one parameter, that is, the image path of the container to be measured.
+-   The tool outputs two files:  **digest\_list\_file**  indicates the hash value list of image layer files, and  **manifest.json**  outputs the image layer file name list in JSON format.
 
-1.  工具部署。
+1.  Deploy the tool. 
 
     ```
     vim gen_layers_ref.sh
@@ -459,13 +457,13 @@
     echo "  - $MANIFEST_FILE"
     ```
 
-    chmod +550  gen\_layers\_ref.sh
+    chmod +550 gen\_layers\_ref.sh
 
-2.  工具使用。
+2.  Use the tool.
 
     ```
     ./gen_layers_ref.sh <image_address>
     ```
 
-    ![](figures/zh-cn_image_0000002061151086.png)
+    ![](figures/en-us_image_0000002243530621.png)
 

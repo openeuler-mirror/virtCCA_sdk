@@ -1,15 +1,15 @@
 # Nydus 基于机密容器部署
 ## 部署说明
 ### 环境依赖要求
-参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 完成kata机密容器基础环境部署，主要依赖如下
+参考 [机密容器部署运行](机密容器部署运行.md) 完成kata机密容器基础环境部署，主要依赖如下
 | 软件包 | 版本 | 说明 | 获取路径 |
 | :---------: | :---------: | :---------: | :---------: |
 | runc | v1.1.8 | 低级容器运行时 | 通过yum源下载或安装 |
 | contaienrd | v1.6.8.2 | coco社区适配的高级容器运行时 | https://github.com/confidential-containers/containerd/releases/download/v1.6.8.2/containerd-1.6.8.2-linux-arm64.tar.gz |
 | k8s | 1.18.20 | 容器编排系统 | 通过yum源下载或安装 |
-| kata | cc0.8.0 | 安全容器 | 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 编译部署 |
-| guest kernel | / | / | 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 编译部署 |
-| rootfs | / | / | 参考 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.md#%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C) 编译部署 |
+| kata | cc0.8.0 | 安全容器 | 参考 [机密容器部署运行](机密容器部署运行.md) 编译部署 |
+| guest kernel | / | / | 参考 [机密容器部署运行](机密容器部署运行.mdC) 编译部署 |
+| rootfs | / | / | 参考 [机密容器部署运行](机密容器部署运行.md) 编译部署 |
 
 ### 新增软件
 
@@ -111,7 +111,7 @@ echo -n "username:password" | base64
 wget https://raw.githubusercontent.com/containerd/nydus-snapshotter/refs/tags/v0.14.0/misc/snapshotter/config.toml
 ```
 
-8. 设置 nydus 的 home 目录`root`选项与本机 containerd 对应的`root`选项，此处设置与 [机密容器部署运行](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E9%83%A8%E7%BD%B2%E8%BF%90%E8%A1%8C.m) 中设置的containerd一致； 设置nydusd和nydus-image的实际安装路径，并关闭 `virtio_fs_extra_args` 选项。
+8. 设置 nydus 的 home 目录`root`选项与本机 containerd 对应的`root`选项，此处设置与 [机密容器部署运行](机密容器部署运行.md) 中设置的containerd一致； 设置nydusd和nydus-image的实际安装路径，并关闭 `virtio_fs_extra_args` 选项。
 ```
 vim config.toml
 
@@ -198,6 +198,7 @@ cd kata-containers/tools/osbuilder/rootfs-builder/
 SECCOMP=no CFLAGS=-mno-outline-atomics ./rootfs.sh -r  "$PWD/kata-overlay" 
 mount rootfs.img rootfs 
 cp kata-overlay/usr/bin/kata-agent rootfs/usr/bin
+umount rootfs
 ```
 
 6. 修改containerd配置文件`/etc/containerd/config.toml`, 设置cri\_handler = "cc"。
@@ -240,14 +241,14 @@ kubectl get pods
 
 # Nydus 部署签名镜像
 
-1. 参考[机密容器远程证明](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E6%9C%BA%E5%AF%86%E5%AE%B9%E5%99%A8%E8%BF%9C%E7%A8%8B%E8%AF%81%E6%98%8E.md)编译部署attestation-agent、attestation-service和KBS。
+1. 参考[机密容器远程证明](机密容器远程证明.md)编译部署attestation-agent、attestation-service和KBS。
 
-2. 参考[镜像签名验签](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E5%AE%B9%E5%99%A8%E9%95%9C%E5%83%8F%E7%AD%BE%E5%90%8D%E9%AA%8C%E7%AD%BE.md)配置skopeo和kata，并生成签名密钥。
+2. 参考[镜像签名验签](容器镜像签名验签.md)配置skopeo和kata，并生成签名密钥。
 
 > 注：当前nydus仅支持镜像签名功能，不支持镜像加密。
 
 3. 使用skopeo对nydus镜像签名
-参考 [镜像签名验签](https://gitee.com/openeuler/virtCCA_sdk/blob/master/doc/confidential_container/%E5%AE%B9%E5%99%A8%E9%95%9C%E5%83%8F%E7%AD%BE%E5%90%8D%E9%AA%8C%E7%AD%BE.md)
+参考 [镜像签名验签](容器镜像签名验签.md)
 生成gpg密钥，通过下述命令获取密钥指纹。
 
 ```bash
