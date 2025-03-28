@@ -198,6 +198,7 @@ cd kata-containers/tools/osbuilder/rootfs-builder/
 SECCOMP=no CFLAGS=-mno-outline-atomics ./rootfs.sh -r  "$PWD/kata-overlay" 
 mount rootfs.img rootfs 
 cp kata-overlay/usr/bin/kata-agent rootfs/usr/bin
+umount rootfs
 ```
 
 6. 修改containerd配置文件`/etc/containerd/config.toml`, 设置cri\_handler = "cc"。
