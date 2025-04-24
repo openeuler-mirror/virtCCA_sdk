@@ -9,6 +9,7 @@ SIZE=50
 TMP_MOUNT_PATH="/tmp/vm_mount"
 CREATE_IMAGE=true
 MEASURE_IMAGE=true
+KAE_ENABLE=false
 EULER_VERSION=""
 
 ok() {
@@ -42,6 +43,7 @@ Usage: $(basename "$0") [OPTION]...
   -s                        Specify the size of guest image
   -v                        openEuler version (24.03, 24.09, ...)
   -p                        Set the password of guest image
+  -k                        Install kae driver
   -o <output file>          Specify the output file, default is openEuler-<version>-aarch64.qcow2.
                             Please make sure the suffix is qcow2. Due to permission consideration,
                             the output file will be put into /tmp/<output file>.
@@ -49,12 +51,13 @@ EOM
 }
 
 process_args() {
-    while getopts "v:i:o:s:u:p:fch" option; do
+    while getopts "v:i:o:s:u:p:fchk" option; do
         case "$option" in
         i) INPUT_IMAGE=$(realpath "$OPTARG") ;;
         o) GUEST_IMG_PATH=$(realpath "$OPTARG") ;;
         s) SIZE=${OPTARG} ;;
         f) FORCE_RECREATE=true ;;
+        k) KAE_ENABLE=true ;;
         v) EULER_VERSION=${OPTARG} ;;
         p) GUEST_PASSWORD=${OPTARG} ;;
         h)
@@ -198,6 +201,48 @@ set_guest_password() {
        --password-crypto sha512
 }
 
+install_kae_driver() {
+    local target_image=${1}
+
+    mkdir -p ${TMP_MOUNT_PATH}
+    guestmount -a ${target_image} -i ${TMP_MOUNT_PATH} || error "Failed to mount the VM image."
+
+    info "Downloading and Making KAE driver"
+    git clone https://gitee.com/openeuler/virtCCA_driver.git --depth 1
+    cd virtCCA_driver/kae_driver
+    make
+
+    mkdir -p ${TMP_MOUNT_PATH}/home/kae
+    cp hisi_plat_qm.ko      ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
+    cp hisi_plat_sec.ko     ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
+    cp hisi_plat_hpre.ko    ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
+
+    cat > ${TMP_MOUNT_PATH}/etc/modules-load.d/virtcca-kae.conf << EOF
+uacce
+hisi_plat_qm
+hisi_plat_sec
+hisi_plat_hpre
+EOF
+
+    cat > ${TMP_MOUNT_PATH}/etc/modprobe.d/virtcca-kae-deps.conf << EOF
+softdep hisi_plat_qm pre: uacce
+softdep hisi_plat_sec pre: hisi_plat_qm
+softdep hisi_plat_hpre pre: hisi_plat_sec
+EOF
+
+    cat > ${TMP_MOUNT_PATH}/home/kae/depmod.sh << EOF
+depmod -a
+EOF
+
+    chmod +x ${TMP_MOUNT_PATH}/home/kae/depmod.sh
+    guestunmount ${TMP_MOUNT_PATH}
+    guestfish --rw -i -a ${target_image} << EOF
+sh /home/kae/depmod.sh
+EOF
+    cd $SCRIPT_DIR
+    ok "Install KAE driver successfully."
+}
+
 measure_guest_image() {
     local target_image=${1}
 
@@ -295,6 +340,10 @@ if [ ${CREATE_IMAGE} == true ]; then
     setup_guest_image
 
     set_guest_password
+fi
+
+if [[ ${KAE_ENABLE} == true ]]; then
+    install_kae_driver "${INPUT_IMAGE}"
 fi
 
 if [[ ${MEASURE_IMAGE} == true ]]; then
