@@ -5,7 +5,7 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 LOGFILE=/tmp/oe-guest-setup.txt
 FORCE_RECREATE=false
 TMP_GUEST_IMG_PATH="/tmp/openEuler-24.03-LTS-SP1-aarch64.qcow2"
-SIZE=50
+SIZE=0
 TMP_MOUNT_PATH="/tmp/vm_mount"
 CREATE_IMAGE=true
 MEASURE_IMAGE=true
@@ -146,9 +146,13 @@ download_image() {
 }
 
 resize_guest_image() {
+    if ["$SIZE" -eq 0]; then
+        ok "Skipped resize as SIZE is 0"
+        return
+    fi
+
     qemu-img resize ${TMP_GUEST_IMG_PATH} +${SIZE}G
     virt-customize -a ${TMP_GUEST_IMG_PATH} \
-        --run-command 'echo "sslverify=false" >> /etc/yum.conf' \
         --install cloud-utils-growpart \
         --run-command 'growpart /dev/sda 2' \
         --run-command 'resize2fs /dev/sda2' \
@@ -183,7 +187,8 @@ setup_guest_image() {
        --run-command 'grub2-mkimage -d /usr/lib/grub/arm64-efi -O arm64-efi --output=/boot/efi/EFI/openEuler/grubaa64.efi --prefix="(,msdos1)/efi/EFI/openEuler" fat part_gpt part_msdos linux tpm' \
        --run-command 'cp -f /boot/efi/EFI/openEuler/grubaa64.efi /boot/EFI/BOOT/BOOTAA64.EFI' \
        --run-command "sed -i '/linux.*vmlinuz-6.6.0/ s/$/ ima_rot=tpm cma=64M virtcca_cvm_guest=1 cvm_guest=1 swiotlb=65536,force loglevel=8/' /boot/efi/EFI/openEuler/grub.cfg" \
-       --run-command "sed -i '/^GRUB_CMDLINE_LINUX=/ s/\"$/ ima_rot=tpm cma=64M virtcca_cvm_guest=1 cvm_guest=1 swiotlb=65536,force loglevel=8\"/' /etc/default/grub"
+       --run-command "sed -i '/^GRUB_CMDLINE_LINUX=/ s/\"$/ ima_rot=tpm cma=64M virtcca_cvm_guest=1 cvm_guest=1 swiotlb=65536,force loglevel=8\"/' /etc/default/grub" \
+       --run-command 'echo "sslverify=false" >> /etc/yum.conf'
     if [ $? -eq 0 ]; then
         ok "Run setup scripts inside the guest image"
     else
