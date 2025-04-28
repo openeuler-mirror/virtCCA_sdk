@@ -217,7 +217,7 @@ install_kae_driver() {
     cd virtCCA_driver/kae_driver
     make
 
-    mkdir -p ${TMP_MOUNT_PATH}/home/kae
+    # mkdir -p ${TMP_MOUNT_PATH}/home/kae
     cp hisi_plat_qm.ko      ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
     cp hisi_plat_sec.ko     ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
     cp hisi_plat_hpre.ko    ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
@@ -235,15 +235,20 @@ softdep hisi_plat_sec pre: hisi_plat_qm
 softdep hisi_plat_hpre pre: hisi_plat_sec
 EOF
 
-    cat > ${TMP_MOUNT_PATH}/home/kae/depmod.sh << EOF
+    cat > ${TMP_MOUNT_PATH}/home/depmod.sh << EOF
 depmod -a
 EOF
 
-    chmod +x ${TMP_MOUNT_PATH}/home/kae/depmod.sh
+    chmod +x ${TMP_MOUNT_PATH}/home/depmod.sh
     guestunmount ${TMP_MOUNT_PATH}
     guestfish --rw -i -a ${target_image} << EOF
 sh /home/kae/depmod.sh
 EOF
+
+    guestmount -a ${target_image} -i ${TMP_MOUNT_PATH} || error "Failed to mount the VM image."
+    rm ${TMP_MOUNT_PATH}/home/depmod.sh
+    guestunmount ${TMP_MOUNT_PATH}
+
     cd $SCRIPT_DIR
     ok "Install KAE driver successfully."
 }
