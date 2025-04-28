@@ -5,10 +5,11 @@ SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 LOGFILE=/tmp/oe-guest-setup.txt
 FORCE_RECREATE=false
 TMP_GUEST_IMG_PATH="/tmp/openEuler-24.03-LTS-SP1-aarch64.qcow2"
-SIZE=50
+SIZE=0
 TMP_MOUNT_PATH="/tmp/vm_mount"
 CREATE_IMAGE=true
 MEASURE_IMAGE=true
+KAE_ENABLE=false
 EULER_VERSION=""
 
 ok() {
@@ -42,6 +43,7 @@ Usage: $(basename "$0") [OPTION]...
   -s                        Specify the size of guest image
   -v                        openEuler version (24.03, 24.09, ...)
   -p                        Set the password of guest image
+  -k                        Install kae driver
   -o <output file>          Specify the output file, default is openEuler-<version>-aarch64.qcow2.
                             Please make sure the suffix is qcow2. Due to permission consideration,
                             the output file will be put into /tmp/<output file>.
@@ -49,12 +51,13 @@ EOM
 }
 
 process_args() {
-    while getopts "v:i:o:s:u:p:fch" option; do
+    while getopts "v:i:o:s:u:p:fchk" option; do
         case "$option" in
         i) INPUT_IMAGE=$(realpath "$OPTARG") ;;
         o) GUEST_IMG_PATH=$(realpath "$OPTARG") ;;
         s) SIZE=${OPTARG} ;;
         f) FORCE_RECREATE=true ;;
+        k) KAE_ENABLE=true ;;
         v) EULER_VERSION=${OPTARG} ;;
         p) GUEST_PASSWORD=${OPTARG} ;;
         h)
@@ -143,9 +146,13 @@ download_image() {
 }
 
 resize_guest_image() {
+    if ["$SIZE" -eq 0]; then
+        ok "Skipped resize as SIZE is 0"
+        return
+    fi
+
     qemu-img resize ${TMP_GUEST_IMG_PATH} +${SIZE}G
     virt-customize -a ${TMP_GUEST_IMG_PATH} \
-        --run-command 'echo "sslverify=false" >> /etc/yum.conf' \
         --install cloud-utils-growpart \
         --run-command 'growpart /dev/sda 2' \
         --run-command 'resize2fs /dev/sda2' \
@@ -180,7 +187,8 @@ setup_guest_image() {
        --run-command 'grub2-mkimage -d /usr/lib/grub/arm64-efi -O arm64-efi --output=/boot/efi/EFI/openEuler/grubaa64.efi --prefix="(,msdos1)/efi/EFI/openEuler" fat part_gpt part_msdos linux tpm' \
        --run-command 'cp -f /boot/efi/EFI/openEuler/grubaa64.efi /boot/EFI/BOOT/BOOTAA64.EFI' \
        --run-command "sed -i '/linux.*vmlinuz-6.6.0/ s/$/ ima_rot=tpm cma=64M virtcca_cvm_guest=1 cvm_guest=1 swiotlb=65536,force loglevel=8/' /boot/efi/EFI/openEuler/grub.cfg" \
-       --run-command "sed -i '/^GRUB_CMDLINE_LINUX=/ s/\"$/ ima_rot=tpm cma=64M virtcca_cvm_guest=1 cvm_guest=1 swiotlb=65536,force loglevel=8\"/' /etc/default/grub"
+       --run-command "sed -i '/^GRUB_CMDLINE_LINUX=/ s/\"$/ ima_rot=tpm cma=64M virtcca_cvm_guest=1 cvm_guest=1 swiotlb=65536,force loglevel=8\"/' /etc/default/grub" \
+       --run-command 'echo "sslverify=false" >> /etc/yum.conf'
     if [ $? -eq 0 ]; then
         ok "Run setup scripts inside the guest image"
     else
@@ -196,6 +204,53 @@ set_guest_password() {
     virt-customize -a ${TMP_GUEST_IMG_PATH} \
        --password root:password:${GUEST_PASSWORD} \
        --password-crypto sha512
+}
+
+install_kae_driver() {
+    local target_image=${1}
+
+    mkdir -p ${TMP_MOUNT_PATH}
+    guestmount -a ${target_image} -i ${TMP_MOUNT_PATH} || error "Failed to mount the VM image."
+
+    info "Downloading and Making KAE driver"
+    git clone https://gitee.com/openeuler/virtCCA_driver.git --depth 1
+    cd virtCCA_driver/kae_driver
+    make
+
+    # mkdir -p ${TMP_MOUNT_PATH}/home/kae
+    cp hisi_plat_qm.ko      ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
+    cp hisi_plat_sec.ko     ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
+    cp hisi_plat_hpre.ko    ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
+
+    cat > ${TMP_MOUNT_PATH}/etc/modules-load.d/virtcca-kae.conf << EOF
+uacce
+hisi_plat_qm
+hisi_plat_sec
+hisi_plat_hpre
+EOF
+
+    cat > ${TMP_MOUNT_PATH}/etc/modprobe.d/virtcca-kae-deps.conf << EOF
+softdep hisi_plat_qm pre: uacce
+softdep hisi_plat_sec pre: hisi_plat_qm
+softdep hisi_plat_hpre pre: hisi_plat_sec
+EOF
+
+    cat > ${TMP_MOUNT_PATH}/home/depmod.sh << EOF
+depmod -a
+EOF
+
+    chmod +x ${TMP_MOUNT_PATH}/home/depmod.sh
+    guestunmount ${TMP_MOUNT_PATH}
+    guestfish --rw -i -a ${target_image} << EOF
+sh /home/kae/depmod.sh
+EOF
+
+    guestmount -a ${target_image} -i ${TMP_MOUNT_PATH} || error "Failed to mount the VM image."
+    rm ${TMP_MOUNT_PATH}/home/depmod.sh
+    guestunmount ${TMP_MOUNT_PATH}
+
+    cd $SCRIPT_DIR
+    ok "Install KAE driver successfully."
 }
 
 measure_guest_image() {
@@ -295,6 +350,10 @@ if [ ${CREATE_IMAGE} == true ]; then
     setup_guest_image
 
     set_guest_password
+fi
+
+if [[ ${KAE_ENABLE} == true ]]; then
+    install_kae_driver "${INPUT_IMAGE}"
 fi
 
 if [[ ${MEASURE_IMAGE} == true ]]; then
