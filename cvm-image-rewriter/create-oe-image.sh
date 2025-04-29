@@ -146,13 +146,14 @@ download_image() {
 }
 
 resize_guest_image() {
-    if ["$SIZE" -eq 0]; then
+    if [ "$SIZE" -eq 0 ]; then
         ok "Skipped resize as SIZE is 0"
         return
     fi
 
     qemu-img resize ${TMP_GUEST_IMG_PATH} +${SIZE}G
     virt-customize -a ${TMP_GUEST_IMG_PATH} \
+        --run-command 'echo "sslverify=false" >> /etc/yum.conf' \
         --install cloud-utils-growpart \
         --run-command 'growpart /dev/sda 2' \
         --run-command 'resize2fs /dev/sda2' \
@@ -217,7 +218,6 @@ install_kae_driver() {
     cd virtCCA_driver/kae_driver
     make
 
-    # mkdir -p ${TMP_MOUNT_PATH}/home/kae
     cp hisi_plat_qm.ko      ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
     cp hisi_plat_sec.ko     ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
     cp hisi_plat_hpre.ko    ${TMP_MOUNT_PATH}/lib/modules/${KERNEL_VERSION}/extra/
@@ -242,7 +242,7 @@ EOF
     chmod +x ${TMP_MOUNT_PATH}/home/depmod.sh
     guestunmount ${TMP_MOUNT_PATH}
     guestfish --rw -i -a ${target_image} << EOF
-sh /home/kae/depmod.sh
+sh /home/depmod.sh
 EOF
 
     guestmount -a ${target_image} -i ${TMP_MOUNT_PATH} || error "Failed to mount the VM image."
@@ -352,7 +352,7 @@ if [ ${CREATE_IMAGE} == true ]; then
     set_guest_password
 fi
 
-if [[ ${KAE_ENABLE} == true ]]; then
+if [ ${KAE_ENABLE} == true ]; then
     install_kae_driver "${INPUT_IMAGE}"
 fi
 
